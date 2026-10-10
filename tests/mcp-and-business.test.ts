@@ -166,6 +166,63 @@ async function runTests() {
 
   console.log("✓ MCP tools/call get_dashboard_summary returned successfully:", !!callData?.result?.content?.[0]?.text);
 
+  // 9. Test OpenAI Profile Tool
+  const profileCall = await sendMcpRequest({
+    jsonrpc: "2.0",
+    id: 3,
+    method: "tools/call",
+    params: {
+      name: "get_user_profile",
+      arguments: {},
+    },
+  });
+  console.log("✓ MCP tools/call get_user_profile returned:", profileCall?.result?.structuredContent?.name);
+  if (!profileCall?.result?._meta?.["openai/profile"]) {
+    throw new Error("Missing openai/profile metadata on profile tool!");
+  }
+
+  // 10. Test Company Knowledge Search Tool
+  const searchCall = await sendMcpRequest({
+    jsonrpc: "2.0",
+    id: 4,
+    method: "tools/call",
+    params: {
+      name: "search",
+      arguments: { query: "Headphones" },
+    },
+  });
+  console.log("✓ MCP tools/call search returned items count:", searchCall?.result?.structuredContent?.results?.length);
+
+  // 11. Test OpenAI Skills Extension (skills/list & skills/get)
+  const skillsListData = await sendMcpRequest({
+    jsonrpc: "2.0",
+    id: 5,
+    method: "skills/list",
+    params: {},
+  });
+  console.log("✓ MCP skills/list returned skills count:", skillsListData?.result?.skills?.length);
+  if (!skillsListData?.result?.skills?.length) {
+    throw new Error("Skills list was empty!");
+  }
+
+  const firstSkill = skillsListData.result.skills[0];
+  const skillGetData = await sendMcpRequest({
+    jsonrpc: "2.0",
+    id: 6,
+    method: "skills/get",
+    params: { uri: firstSkill.uri },
+  });
+  console.log("✓ MCP skills/get returned skill name:", skillGetData?.result?.skill?.frontmatter?.name);
+
+  // 12. Test resources/read on skill URI
+  const resourceReadData = await sendMcpRequest({
+    jsonrpc: "2.0",
+    id: 7,
+    method: "resources/read",
+    params: { uri: firstSkill.uri },
+  });
+  console.log("✓ MCP resources/read on skill URI returned content length:", resourceReadData?.result?.contents?.[0]?.text?.length);
+
   console.log("\n=======================================================");
   console.log("ALL PLATFORM AND MCP VERIFICATION TESTS PASSED CLEANLY!");
   console.log("=======================================================\n");

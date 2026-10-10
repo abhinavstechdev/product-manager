@@ -13,14 +13,29 @@ import * as customerService from "../services/customer-service";
 import * as reportService from "../services/report-service";
 import * as confirmationService from "../services/confirmation-service";
 import { getDb } from "../db/client";
-import { auditEvents, orders, products } from "../db/schema";
+import { auditEvents, orders, products, workspaces } from "../db/schema";
 import { eq, desc } from "drizzle-orm";
+import { registerSkillsExtension } from "./skills";
 
 export function createMcpServer(principal: McpAuthPrincipal) {
-  const server = new McpServer({
-    name: "Apex AI Inventory & Order MCP Server",
-    version: "1.0.0",
-  });
+  const server = new McpServer(
+    {
+      name: "apex-commerce",
+      version: "1.0.0",
+    },
+    {
+      instructions:
+        "Apex Inventory & Order Management Platform. Core rules: Available stock = Physical - Reserved. Always verify product SKU using get_product or search before creating orders or adjustments. High-impact operations (negative stock adjustments, order cancellations) require confirmation tokens via request_action_confirmation. Packing slips exclude customer payment details. Delivered status does not mark order as paid. Use get_user_profile to identify operator context.",
+      capabilities: {
+        tools: { listChanged: true },
+        resources: { subscribe: false, listChanged: true },
+        prompts: { listChanged: true },
+        extensions: {
+          "io.modelcontextprotocol/skills": {},
+        },
+      },
+    }
+  );
 
   const workspaceId = principal.workspaceId;
   const actor = {
@@ -35,6 +50,171 @@ export function createMcpServer(principal: McpAuthPrincipal) {
       throw new Error(`FORBIDDEN: Missing required OAuth scope '${scope}'`);
     }
   }
+
+  // --- 0. OPENAI PROFILE & COMPANY KNOWLEDGE COMPATIBILITY TOOLS ---
+
+  server.registerTool(
+    "get_user_profile",
+    {
+      title: "Get User Profile",
+      description:
+        "Retrieve authenticated operator identity, active role, permissions, and multi-tenant workspace context.",
+      inputSchema: {},
+      annotations: {
+        readOnlyHint: true,
+        openWorldHint: false,
+        destructiveHint: false,
+      },
+      _meta: {
+        "openai/profile": true,
+      },
+    },
+    async () => {
+      const db = await getDb();
+      const [ws] = await (db as any)
+        .select()
+        .from(workspaces)
+        .where(eq(workspaces.id, workspaceId))
+        .limit(1);
+
+      const profile = {
+        userId: principal.clientId,
+        name: principal.clientId === "client_owner_local" ? "Rohan Sharma" : "Operator",
+        workspaceId: principal.workspaceId,
+        workspaceName: ws?.name || "Apex Logistics & Retail",
+        role: principal.scopes.includes("orders:write") ? "ADMIN" : "OPERATOR",
+        scopes: principal.scopes,
+      };
+
+      return {
+        content: [
+          {
+            type: "text",
+            text: `Authenticated as ${profile.name} (${profile.role}) in workspace "${profile.workspaceName}" (${profile.workspaceId}).`,
+          },
+        ],
+        structuredContent: profile,
+        _meta: {
+          "openai/profile": true,
+        },
+      };
+    }
+  );
+
+  server.registerTool(
+    "search",
+    {
+      title: "Search Knowledge & Records",
+      description:
+        "Standard company knowledge search across products, customer accounts, and order records. Returns absolute URLs for citations.",
+      inputSchema: {
+        query: z.string().describe("Search keyword query"),
+        limit: z.coerce.number().optional().default(10),
+      },
+      annotations: {
+        readOnlyHint: true,
+        openWorldHint: false,
+        destructiveHint: false,
+      },
+    },
+    async ({ query, limit }) => {
+      requireScope("dashboard:read");
+      const prods = await productService.listProducts(workspaceId, { search: query });
+      const ords = await orderService.listOrders(workspaceId, { search: query });
+      const custs = await customerService.listCustomers(workspaceId, query);
+
+      const results = [
+        ...prods.map((p: any) => ({
+          id: `product:${p.id}`,
+          title: `${p.name} (SKU: ${p.sku})`,
+          text: `Product: ${p.name}, SKU: ${p.sku}, Price: ₹${p.sellingPrice || p.price}, Physical: ${p.physicalStock}, Available: ${p.availableStock}`,
+          url: `https://product-manager-ai-studio.vercel.app/products#${p.id}`,
+        })),
+        ...ords.map((o: any) => ({
+          id: `order:${o.id}`,
+          title: `Order ${o.orderNumber}`,
+          text: `Order ${o.orderNumber}, Status: ${o.status}, Total: ₹${o.totalAmount}, Payment: ${o.paymentStatus}`,
+          url: `https://product-manager-ai-studio.vercel.app/orders#${o.id}`,
+        })),
+        ...custs.map((c: any) => ({
+          id: `customer:${c.id}`,
+          title: `Customer: ${c.name}`,
+          text: `Customer ${c.name}, Email: ${c.email || "N/A"}, Phone: ${c.phone || "N/A"}`,
+          url: `https://product-manager-ai-studio.vercel.app/customers#${c.id}`,
+        })),
+      ].slice(0, limit);
+
+      return {
+        content: [{ type: "text", text: `Found ${results.length} records matching "${query}".` }],
+        structuredContent: { results },
+      };
+    }
+  );
+
+  server.registerTool(
+    "fetch",
+    {
+      title: "Fetch Knowledge Record",
+      description:
+        "Fetch a specific business entity by its identifier (e.g. product:prod_xxx, order:ord_xxx, or customer:cust_xxx) with citation URL.",
+      inputSchema: {
+        id: z.string().describe("Entity identifier with type prefix (e.g. product:id, order:id, customer:id)"),
+      },
+      annotations: {
+        readOnlyHint: true,
+        openWorldHint: false,
+        destructiveHint: false,
+      },
+    },
+    async ({ id }) => {
+      requireScope("dashboard:read");
+      const [type, rawId] = id.includes(":") ? id.split(":") : ["product", id];
+
+      if (type === "order") {
+        const order = await orderService.getOrderDetails(workspaceId, rawId);
+        if (!order) throw new Error(`Order not found: ${rawId}`);
+        return {
+          content: [{ type: "text", text: JSON.stringify(order, null, 2) }],
+          structuredContent: {
+            id,
+            title: `Order ${order.orderNumber}`,
+            text: `Order ${order.orderNumber} in status ${order.status} with ${order.items?.length || 0} line items.`,
+            url: `https://product-manager-ai-studio.vercel.app/orders#${rawId}`,
+            metadata: order,
+          },
+        };
+      } else if (type === "customer") {
+        const customer = await customerService.getCustomer(workspaceId, rawId);
+        if (!customer) throw new Error(`Customer not found: ${rawId}`);
+        return {
+          content: [{ type: "text", text: JSON.stringify(customer, null, 2) }],
+          structuredContent: {
+            id,
+            title: `Customer ${customer.name}`,
+            text: `Customer ${customer.name}, Phone: ${customer.phone}, Address: ${customer.defaultShippingAddress}`,
+            url: `https://product-manager-ai-studio.vercel.app/customers#${rawId}`,
+            metadata: customer,
+          },
+        };
+      } else {
+        const prods = await productService.listProducts(workspaceId);
+        const product = prods.find(
+          (p: any) => p.id === rawId || p.sku.toUpperCase() === rawId.toUpperCase()
+        );
+        if (!product) throw new Error(`Product not found: ${rawId}`);
+        return {
+          content: [{ type: "text", text: JSON.stringify(product, null, 2) }],
+          structuredContent: {
+            id,
+            title: `Product ${product.name}`,
+            text: `Product ${product.name} (SKU: ${product.sku}), Price: ₹${product.sellingPrice || product.price}, Available: ${product.availableStock}`,
+            url: `https://product-manager-ai-studio.vercel.app/products#${rawId}`,
+            metadata: product,
+          },
+        };
+      }
+    }
+  );
 
   // --- 1. DASHBOARD & SEARCH TOOLS ---
 
@@ -1428,6 +1608,9 @@ export function createMcpServer(principal: McpAuthPrincipal) {
       };
     }
   );
+
+  // Register OpenAI Skills Extension (SEP-2640)
+  registerSkillsExtension(server);
 
   return server;
 }
