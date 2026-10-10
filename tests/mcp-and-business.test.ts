@@ -238,6 +238,89 @@ async function runTests() {
   });
   console.log("✓ MCP resources/read on skill URI returned content length:", resourceReadData?.result?.contents?.[0]?.text?.length);
 
+  // 12.1 Test MCP Apps UI Resources (text/html;profile=mcp-app)
+  console.log("\n--- Testing MCP Apps UI Resources & Decoupled Render Tools ---");
+  const dashboardUiRead = await sendMcpRequest({
+    jsonrpc: "2.0",
+    id: 71,
+    method: "resources/read",
+    params: { uri: "ui://widget/dashboard.html" },
+  });
+  if (dashboardUiRead?.result?.contents?.[0]?.mimeType !== "text/html;profile=mcp-app") {
+    throw new Error(`Expected mimeType 'text/html;profile=mcp-app' on dashboard widget, got: ${dashboardUiRead?.result?.contents?.[0]?.mimeType}`);
+  }
+  console.log("✓ MCP Apps Dashboard Resource verified (MIME: text/html;profile=mcp-app, size:", dashboardUiRead.result.contents[0].text.length, "chars)");
+
+  const productsUiRead = await sendMcpRequest({
+    jsonrpc: "2.0",
+    id: 72,
+    method: "resources/read",
+    params: { uri: "ui://widget/products.html" },
+  });
+  if (productsUiRead?.result?.contents?.[0]?.mimeType !== "text/html;profile=mcp-app") {
+    throw new Error(`Expected mimeType 'text/html;profile=mcp-app' on products widget, got: ${productsUiRead?.result?.contents?.[0]?.mimeType}`);
+  }
+  console.log("✓ MCP Apps Products Resource verified (MIME: text/html;profile=mcp-app, size:", productsUiRead.result.contents[0].text.length, "chars)");
+
+  const orderUiRead = await sendMcpRequest({
+    jsonrpc: "2.0",
+    id: 73,
+    method: "resources/read",
+    params: { uri: "ui://widget/order.html" },
+  });
+  if (orderUiRead?.result?.contents?.[0]?.mimeType !== "text/html;profile=mcp-app") {
+    throw new Error(`Expected mimeType 'text/html;profile=mcp-app' on order widget, got: ${orderUiRead?.result?.contents?.[0]?.mimeType}`);
+  }
+  console.log("✓ MCP Apps Order Resource verified (MIME: text/html;profile=mcp-app, size:", orderUiRead.result.contents[0].text.length, "chars)");
+
+  // Test Decoupled Call Flow: render_dashboard_widget
+  const renderDashCall = await sendMcpRequest({
+    jsonrpc: "2.0",
+    id: 74,
+    method: "tools/call",
+    params: {
+      name: "render_dashboard_widget",
+      arguments: {},
+    },
+  });
+  if (renderDashCall?.result?._meta?.ui?.resourceUri !== "ui://widget/dashboard.html") {
+    throw new Error("render_dashboard_widget missing _meta.ui.resourceUri!");
+  }
+  if (renderDashCall?.result?._meta?.["openai/outputTemplate"] !== "ui://widget/dashboard.html") {
+    throw new Error("render_dashboard_widget missing openai/outputTemplate alias!");
+  }
+  console.log("✓ render_dashboard_widget returned _meta.ui.resourceUri and openai/outputTemplate alias");
+
+  // Test Decoupled Call Flow: render_products_widget
+  const renderProdsCall = await sendMcpRequest({
+    jsonrpc: "2.0",
+    id: 75,
+    method: "tools/call",
+    params: {
+      name: "render_products_widget",
+      arguments: { products: [] },
+    },
+  });
+  if (renderProdsCall?.result?._meta?.ui?.resourceUri !== "ui://widget/products.html") {
+    throw new Error("render_products_widget missing _meta.ui.resourceUri!");
+  }
+  console.log("✓ render_products_widget returned _meta.ui.resourceUri");
+
+  // Test Decoupled Call Flow: render_order_widget
+  const renderOrderCall = await sendMcpRequest({
+    jsonrpc: "2.0",
+    id: 76,
+    method: "tools/call",
+    params: {
+      name: "render_order_widget",
+      arguments: { order: testOrder },
+    },
+  });
+  if (renderOrderCall?.result?._meta?.ui?.resourceUri !== "ui://widget/order.html") {
+    throw new Error("render_order_widget missing _meta.ui.resourceUri!");
+  }
+  console.log("✓ render_order_widget returned _meta.ui.resourceUri for test order");
+
   // 13. Test ChatGPT MCP Compliant Destructive Deletion Tools
   console.log("\n--- Testing Destructive Deletion Tools (ChatGPT MCP Guide Compliance) ---");
 

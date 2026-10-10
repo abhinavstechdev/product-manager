@@ -18,6 +18,14 @@ import { auditEvents, orders, products, workspaces } from "../db/schema";
 import { eq, desc } from "drizzle-orm";
 import { registerSkillsExtension } from "./skills";
 import { getBaseUrl } from "../config/urls";
+import {
+  DASHBOARD_WIDGET_URI,
+  PRODUCTS_WIDGET_URI,
+  ORDER_WIDGET_URI,
+  getDashboardWidgetHtml,
+  getProductsWidgetHtml,
+  getOrderWidgetHtml,
+} from "./widgets";
 
 export function createMcpServer(principal: McpAuthPrincipal) {
   const server = new McpServer(
@@ -27,7 +35,7 @@ export function createMcpServer(principal: McpAuthPrincipal) {
     },
     {
       instructions:
-        "Apex Inventory & Order Management Platform. Core rules: Available stock = Physical - Reserved. Always verify product SKU using get_product or search before creating orders or adjustments. Destructive operations (delete_product, delete_order, delete_customer, delete_category, delete_payment, delete_return, factory_reset) and high-impact operations (negative stock adjustments, order cancellations) require confirmation in compliance with the ChatGPT MCP specification. Factory reset (factory_reset) requires asking the operator for the master security password ('Aezakmi@ff135') before execution. Packing slips exclude customer payment details. Delivered status does not mark order as paid. Use get_user_profile to identify operator context.",
+        "Apex Inventory & Order Management Platform. Core rules: Available stock = Physical - Reserved. Always verify product SKU using get_product or search before creating orders or adjustments. Destructive operations (delete_product, delete_order, delete_customer, delete_category, delete_payment, delete_return, factory_reset) and high-impact operations (negative stock adjustments, order cancellations) require confirmation in compliance with the ChatGPT MCP specification. Factory reset (factory_reset) requires asking the operator for the master security password ('Aezakmi@ff135') before execution. Packing slips exclude customer payment details. Delivered status does not mark order as paid. Use get_user_profile to identify operator context. For UI, follow the decoupled pattern: call data tools (get_dashboard_summary, list_products, get_order) to fetch data, then render tools (render_dashboard_widget, render_products_widget, render_order_widget) to display interactive components.",
       capabilities: {
         tools: { listChanged: true },
         resources: { subscribe: false, listChanged: true },
@@ -52,6 +60,77 @@ export function createMcpServer(principal: McpAuthPrincipal) {
       throw new Error(`FORBIDDEN: Missing required OAuth scope '${scope}'`);
     }
   }
+
+  // --- UI RESOURCES (MCP Apps Standard & ChatGPT UI Extension) ---
+
+  server.registerResource(
+    "dashboard_widget",
+    DASHBOARD_WIDGET_URI,
+    {
+      mimeType: "text/html;profile=mcp-app",
+      description: "Interactive Executive Dashboard Widget UI for Apex Commerce",
+    },
+    async () => ({
+      contents: [
+        {
+          uri: DASHBOARD_WIDGET_URI,
+          mimeType: "text/html;profile=mcp-app",
+          text: getDashboardWidgetHtml(),
+          _meta: {
+            ui: {
+              prefersBorder: true,
+            },
+          },
+        },
+      ],
+    })
+  );
+
+  server.registerResource(
+    "products_widget",
+    PRODUCTS_WIDGET_URI,
+    {
+      mimeType: "text/html;profile=mcp-app",
+      description: "Interactive Products & Inventory Catalog Widget UI",
+    },
+    async () => ({
+      contents: [
+        {
+          uri: PRODUCTS_WIDGET_URI,
+          mimeType: "text/html;profile=mcp-app",
+          text: getProductsWidgetHtml(),
+          _meta: {
+            ui: {
+              prefersBorder: true,
+            },
+          },
+        },
+      ],
+    })
+  );
+
+  server.registerResource(
+    "order_widget",
+    ORDER_WIDGET_URI,
+    {
+      mimeType: "text/html;profile=mcp-app",
+      description: "Interactive Order Inspector & Action Widget UI",
+    },
+    async () => ({
+      contents: [
+        {
+          uri: ORDER_WIDGET_URI,
+          mimeType: "text/html;profile=mcp-app",
+          text: getOrderWidgetHtml(),
+          _meta: {
+            ui: {
+              prefersBorder: true,
+            },
+          },
+        },
+      ],
+    })
+  );
 
   // --- 0. OPENAI PROFILE & COMPANY KNOWLEDGE COMPATIBILITY TOOLS ---
 
@@ -229,7 +308,10 @@ export function createMcpServer(principal: McpAuthPrincipal) {
     async () => {
       requireScope("dashboard:read");
       const summary = await reportService.getDashboardOverview(workspaceId);
-      return { content: [{ type: "text", text: JSON.stringify(summary, null, 2) }] };
+      return {
+        content: [{ type: "text", text: JSON.stringify(summary, null, 2) }],
+        structuredContent: summary,
+      };
     }
   );
 
@@ -317,7 +399,10 @@ export function createMcpServer(principal: McpAuthPrincipal) {
     async (args) => {
       requireScope("products:read");
       const prods = await productService.listProducts(workspaceId, args);
-      return { content: [{ type: "text", text: JSON.stringify(prods, null, 2) }] };
+      return {
+        content: [{ type: "text", text: JSON.stringify(prods, null, 2) }],
+        structuredContent: { products: prods },
+      };
     }
   );
 
@@ -743,7 +828,10 @@ export function createMcpServer(principal: McpAuthPrincipal) {
       requireScope("orders:read");
       const ord = await orderService.getOrderDetails(workspaceId, orderIdOrNumber);
       if (!ord) throw new Error(`Order not found: ${orderIdOrNumber}`);
-      return { content: [{ type: "text", text: JSON.stringify(ord, null, 2) }] };
+      return {
+        content: [{ type: "text", text: JSON.stringify(ord, null, 2) }],
+        structuredContent: ord,
+      };
     }
   );
 
@@ -1922,6 +2010,148 @@ export function createMcpServer(principal: McpAuthPrincipal) {
       const summary = await inventoryService.getInventorySummary(workspaceId);
       return {
         contents: [{ uri: uri.href, text: JSON.stringify(summary, null, 2), mimeType: "application/json" }],
+      };
+    }
+  );
+
+  // --- 11. UI RENDER TOOLS (Decoupled MCP Apps Standard & ChatGPT UI Extension) ---
+
+  server.registerTool(
+    "render_dashboard_widget",
+    {
+      title: "Render Dashboard Widget",
+      description:
+        "Render the interactive executive dashboard widget. Always call get_dashboard_summary first to retrieve authoritative metrics, then pass them to this tool to display the UI in ChatGPT / MCP Apps.",
+      inputSchema: {
+        dashboardData: z
+          .record(z.string(), z.any())
+          .optional()
+          .describe("Summary metrics from get_dashboard_summary"),
+      },
+      annotations: {
+        readOnlyHint: true,
+        openWorldHint: false,
+        destructiveHint: false,
+      },
+      _meta: {
+        ui: { resourceUri: DASHBOARD_WIDGET_URI },
+        "openai/outputTemplate": DASHBOARD_WIDGET_URI,
+        "openai/toolInvocation/invoking": "Rendering executive dashboard...",
+        "openai/toolInvocation/invoked": "Dashboard rendered.",
+      },
+    },
+    async ({ dashboardData }) => {
+      requireScope("dashboard:read");
+      const summary = dashboardData || (await reportService.getDashboardOverview(workspaceId));
+      return {
+        content: [
+          {
+            type: "text",
+            text: `Executive dashboard widget rendered with real-time operational metrics (Revenue: ₹${summary?.financials?.totalRevenue || 0}, Physical Stock: ${summary?.products?.physicalStock || 0}).`,
+          },
+        ],
+        structuredContent: summary,
+        _meta: {
+          ui: { resourceUri: DASHBOARD_WIDGET_URI },
+          "openai/outputTemplate": DASHBOARD_WIDGET_URI,
+        },
+      };
+    }
+  );
+
+  server.registerTool(
+    "render_products_widget",
+    {
+      title: "Render Products Widget",
+      description:
+        "Render the interactive product catalog and inventory widget. Always call list_products first to query the catalog, then pass the products to this tool to display the interactive UI.",
+      inputSchema: {
+        products: z
+          .array(z.record(z.string(), z.any()))
+          .optional()
+          .describe("Array of product items from list_products"),
+        filter: z.string().optional().describe("Optional active search or category filter"),
+      },
+      annotations: {
+        readOnlyHint: true,
+        openWorldHint: false,
+        destructiveHint: false,
+      },
+      _meta: {
+        ui: { resourceUri: PRODUCTS_WIDGET_URI },
+        "openai/outputTemplate": PRODUCTS_WIDGET_URI,
+        "openai/toolInvocation/invoking": "Rendering products catalog...",
+        "openai/toolInvocation/invoked": "Products catalog rendered.",
+      },
+    },
+    async ({ products: prodsList, filter }) => {
+      requireScope("products:read");
+      const prods = prodsList || (await productService.listProducts(workspaceId, { search: filter }));
+      return {
+        content: [
+          {
+            type: "text",
+            text: `Products catalog widget rendered showing ${prods.length} products.`,
+          },
+        ],
+        structuredContent: { products: prods, filter: filter || "" },
+        _meta: {
+          ui: { resourceUri: PRODUCTS_WIDGET_URI },
+          "openai/outputTemplate": PRODUCTS_WIDGET_URI,
+        },
+      };
+    }
+  );
+
+  server.registerTool(
+    "render_order_widget",
+    {
+      title: "Render Order Widget",
+      description:
+        "Render the interactive order inspector widget. Always call get_order first to retrieve order and line item details, then pass them to this tool to display the UI with packing/dispatch actions.",
+      inputSchema: {
+        order: z
+          .record(z.string(), z.any())
+          .optional()
+          .describe("Complete order details from get_order"),
+        orderIdOrNumber: z
+          .string()
+          .optional()
+          .describe("Order ID or order number to inspect if order details not provided"),
+      },
+      annotations: {
+        readOnlyHint: true,
+        openWorldHint: false,
+        destructiveHint: false,
+      },
+      _meta: {
+        ui: { resourceUri: ORDER_WIDGET_URI },
+        "openai/outputTemplate": ORDER_WIDGET_URI,
+        "openai/toolInvocation/invoking": "Rendering order inspector...",
+        "openai/toolInvocation/invoked": "Order inspector rendered.",
+      },
+    },
+    async ({ order: orderDetails, orderIdOrNumber }) => {
+      requireScope("orders:read");
+      let ord = orderDetails;
+      if (!ord && orderIdOrNumber) {
+        ord = await orderService.getOrderDetails(workspaceId, orderIdOrNumber);
+      }
+      if (!ord) {
+        throw new Error("Must provide order object or orderIdOrNumber to render order widget");
+      }
+      return {
+        content: [
+          {
+            type: "text",
+            text: `Order inspector widget rendered for Order ${ord.orderNumber || ord.id} (Status: ${ord.status}, Total: ₹${ord.totalAmount || 0}).`,
+          },
+        ],
+        structuredContent: ord,
+        _meta: {
+          ui: { resourceUri: ORDER_WIDGET_URI },
+          "openai/outputTemplate": ORDER_WIDGET_URI,
+        },
       };
     }
   );

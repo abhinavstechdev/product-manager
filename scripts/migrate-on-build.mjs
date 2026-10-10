@@ -15,13 +15,7 @@ console.log("=======================================================");
 const databaseUrl = process.env.DATABASE_URL;
 
 if (databaseUrl && databaseUrl.trim() !== "") {
-  console.log("⚡ DATABASE_URL detected. Executing automatic schema migration on Vercel deployment...");
-  try {
-    execSync("npx drizzle-kit push --force", { stdio: "inherit" });
-    console.log("✓ Database schema synchronized successfully with Neon PostgreSQL!\n");
-  } catch (err) {
-    console.warn("⚠️ Note: Drizzle push during build exited with notice. Runtime auto-migration will also verify on first query.\n");
-  }
+  console.log("⚡ DATABASE_URL detected. Runtime auto-migration will verify on startup.\n");
 } else {
   console.log("ℹ️ No DATABASE_URL provided during build phase. Offline embedded PGlite will initialize at runtime.\n");
 }

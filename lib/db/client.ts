@@ -19,9 +19,10 @@ export async function getDb(): Promise<AppDatabase> {
     return cachedDb;
   }
 
-  const databaseUrl = process.env.DATABASE_URL;
+  const rawDatabaseUrl = process.env.DATABASE_URL;
 
-  if (databaseUrl && databaseUrl.trim() !== "") {
+  if (rawDatabaseUrl && rawDatabaseUrl.trim() !== "") {
+    const databaseUrl = rawDatabaseUrl.replace(/([?&])channel_binding=[^&]+(&|$)/, (_, p1, p2) => (p1 === "?" && p2 ? "?" : ""));
     const pool = new Pool({
       connectionString: databaseUrl,
       max: 10,
@@ -62,8 +63,9 @@ export const db = new Proxy({} as AppDatabase, {
   get(_target, prop) {
     if (!cachedDb) {
       // Synchronous lazy initialize with PGlite if not already initialized
-      const databaseUrl = process.env.DATABASE_URL;
-      if (databaseUrl && databaseUrl.trim() !== "") {
+      const rawDatabaseUrl = process.env.DATABASE_URL;
+      if (rawDatabaseUrl && rawDatabaseUrl.trim() !== "") {
+        const databaseUrl = rawDatabaseUrl.replace(/([?&])channel_binding=[^&]+(&|$)/, (_, p1, p2) => (p1 === "?" && p2 ? "?" : ""));
         const pool = new Pool({
           connectionString: databaseUrl,
           max: 10,
@@ -96,20 +98,31 @@ export async function ensureSchemaAndSeed(database: AppDatabase) {
   schemaInitialized = true;
 
   try {
-    // Read the generated SQL migration file
-    const migrationPath = path.join(process.cwd(), "drizzle", "0000_flaky_iron_monger.sql");
-    if (fs.existsSync(migrationPath)) {
-      const sqlContent = fs.readFileSync(migrationPath, "utf-8");
-      const statements = sqlContent
-        .split("--> statement-breakpoint")
-        .map((s) => s.trim())
-        .filter((s) => s.length > 0);
+    // Quick check if schema already exists to prevent redundant network round trips
+    let tablesExist = false;
+    try {
+      await (database as any).select().from(schema.workspaces).limit(1);
+      tablesExist = true;
+    } catch {
+      tablesExist = false;
+    }
 
-      for (const statement of statements) {
-        try {
-          await (database as any).execute(statement);
-        } catch {
-          // Ignore table already exists or constraint already exists errors
+    if (!tablesExist) {
+      // Read the generated SQL migration file
+      const migrationPath = path.join(process.cwd(), "drizzle", "0000_flaky_iron_monger.sql");
+      if (fs.existsSync(migrationPath)) {
+        const sqlContent = fs.readFileSync(migrationPath, "utf-8");
+        const statements = sqlContent
+          .split("--> statement-breakpoint")
+          .map((s) => s.trim())
+          .filter((s) => s.length > 0);
+
+        for (const statement of statements) {
+          try {
+            await (database as any).execute(statement);
+          } catch {
+            // Ignore table already exists or constraint already exists errors
+          }
         }
       }
     }
