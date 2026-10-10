@@ -1,6 +1,6 @@
 import { getDb } from "../db/client";
 import { orders, shipments, orderItems, customers, orderStatusHistory } from "../db/schema";
-import { eq, and, sql, desc } from "drizzle-orm";
+import { eq, and, sql, desc, or } from "drizzle-orm";
 import { dispatchStockForOrder, StockActor } from "./inventory-service";
 import { logAuditEvent } from "../audit/audit-service";
 import { dispatchMcpEvent } from "../mcp/events";
@@ -43,7 +43,12 @@ export async function markOrderShipped(params: {
   const [order] = await (db as any)
     .select()
     .from(orders)
-    .where(and(eq(orders.id, params.orderId), eq(orders.workspaceId, params.workspaceId)))
+    .where(
+      and(
+        eq(orders.workspaceId, params.workspaceId),
+        or(eq(orders.id, params.orderId), eq(orders.orderNumber, params.orderId))
+      )
+    )
     .limit(1);
 
   if (!order) {
@@ -160,11 +165,28 @@ export async function markOrderDelivered(params: {
   const [order] = await (db as any)
     .select()
     .from(orders)
-    .where(and(eq(orders.id, params.orderId), eq(orders.workspaceId, params.workspaceId)))
+    .where(
+      and(
+        eq(orders.workspaceId, params.workspaceId),
+        or(eq(orders.id, params.orderId), eq(orders.orderNumber, params.orderId))
+      )
+    )
     .limit(1);
 
   if (!order) {
     throw new Error(`Order not found: ${params.orderId}`);
+  }
+
+  // Idempotent: If order is already DELIVERED, treat as successful
+  if (order.status === "DELIVERED") {
+    return {
+      orderId: order.id,
+      orderNumber: order.orderNumber,
+      status: "DELIVERED",
+      paymentStatus: order.paymentStatus,
+      alreadyDelivered: true,
+      message: `Order ${order.orderNumber} is already marked as DELIVERED.`,
+    };
   }
 
   if (order.status !== "SHIPPED") {
@@ -228,6 +250,7 @@ export async function listShipments(workspaceId: string) {
     .select({
       shipment: shipments,
       orderNumber: orders.orderNumber,
+      orderStatus: orders.status,
       customerAddress: orders.shippingAddress,
     })
     .from(shipments)

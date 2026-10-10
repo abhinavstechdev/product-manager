@@ -9,7 +9,9 @@ export default function ShippingPage() {
   const [queue, setQueue] = useState<any[]>([]);
   const [shipments, setShipments] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
+  const [deliveringId, setDeliveringId] = useState<string | null>(null);
   const [selectedShipOrder, setSelectedShipOrder] = useState<any | null>(null);
+  const [feedback, setFeedback] = useState<{ type: "success" | "error"; text: string } | null>(null);
 
   const loadData = async () => {
     try {
@@ -18,8 +20,9 @@ export default function ShippingPage() {
       const data = await res.json();
       setQueue(data.queue || []);
       setShipments(data.shipments || []);
-    } catch (err) {
+    } catch (err: any) {
       console.error(err);
+      setFeedback({ type: "error", text: "Failed to load shipping data." });
     } finally {
       setLoading(false);
     }
@@ -31,15 +34,30 @@ export default function ShippingPage() {
 
   const handleMarkDelivered = async (orderId: string) => {
     try {
+      setDeliveringId(orderId);
+      setFeedback(null);
       const res = await fetch("/api/shipping", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ orderId, action: "DELIVER" }),
       });
-      if (!res.ok) throw new Error("Failed to mark delivered");
-      loadData();
-    } catch (err) {
+      const data = await res.json();
+      if (!res.ok) {
+        throw new Error(data.error || "Failed to mark delivered");
+      }
+      setFeedback({
+        type: "success",
+        text: `Order ${data.orderNumber || ""} marked as DELIVERED successfully!`,
+      });
+      await loadData();
+    } catch (err: any) {
       console.error(err);
+      setFeedback({
+        type: "error",
+        text: err?.message || "Error marking order as delivered.",
+      });
+    } finally {
+      setDeliveringId(null);
     }
   };
 
@@ -57,6 +75,28 @@ export default function ShippingPage() {
           </p>
         </div>
       </div>
+
+      {/* Status Feedback Banner */}
+      {feedback && (
+        <div
+          className={`p-3.5 rounded-xl border text-xs flex items-center justify-between shadow-lg transition ${
+            feedback.type === "success"
+              ? "bg-emerald-950/40 border-emerald-700/60 text-emerald-300"
+              : "bg-rose-950/40 border-rose-700/60 text-rose-300"
+          }`}
+        >
+          <div className="flex items-center gap-2">
+            <CheckCircle2 className="w-4 h-4 shrink-0" />
+            <span>{feedback.text}</span>
+          </div>
+          <button
+            onClick={() => setFeedback(null)}
+            className="text-slate-400 hover:text-white px-2 py-0.5 text-[11px] rounded bg-slate-800/50 hover:bg-slate-800"
+          >
+            Dismiss
+          </button>
+        </div>
+      )}
 
       {/* 1. Packed Orders Awaiting Dispatch */}
       <div className="space-y-4">
@@ -160,12 +200,20 @@ export default function ShippingPage() {
                             : "3-5 days"}
                         </td>
                         <td className="py-3 px-4 text-center">
-                          <button
-                            onClick={() => handleMarkDelivered(shp.orderId)}
-                            className="px-3 py-1 rounded-lg text-xs font-semibold bg-emerald-500/15 hover:bg-emerald-500/25 text-emerald-400 border border-emerald-500/30"
-                          >
-                            Mark Delivered
-                          </button>
+                          {sRow.orderStatus === "DELIVERED" ? (
+                            <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-lg text-xs font-semibold bg-emerald-500/15 text-emerald-400 border border-emerald-500/30">
+                              <CheckCircle2 className="w-3.5 h-3.5" />
+                              Delivered
+                            </span>
+                          ) : (
+                            <button
+                              onClick={() => handleMarkDelivered(shp.orderId)}
+                              disabled={deliveringId === shp.orderId}
+                              className="px-3 py-1 rounded-lg text-xs font-semibold bg-emerald-500/15 hover:bg-emerald-500/25 text-emerald-400 border border-emerald-500/30 transition disabled:opacity-50 cursor-pointer"
+                            >
+                              {deliveringId === shp.orderId ? "Updating..." : "Mark Delivered"}
+                            </button>
+                          )}
                         </td>
                       </tr>
                     );
