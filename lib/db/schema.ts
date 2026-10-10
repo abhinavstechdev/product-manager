@@ -336,3 +336,20 @@ export const idempotencyRecords = pgTable(
     uniqueIndex("ws_idemp_key_idx").on(table.workspaceId, table.idempotencyKey),
   ]
 );
+
+export const eventSubscriptions = pgTable("event_subscriptions", {
+  id: text("id").primaryKey(),
+  workspaceId: text("workspace_id")
+    .notNull()
+    .references(() => workspaces.id, { onDelete: "cascade" }),
+  clientId: text("client_id").notNull(),
+  eventName: text("event_name").notNull(),
+  arguments: text("arguments").notNull().default("{}"),
+  callbackUrl: text("callback_url").notNull(),
+  secret: text("secret").notNull(),
+  active: boolean("active").default(true).notNull(),
+  refreshBefore: timestamp("refresh_before", { withTimezone: true }).notNull(),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+});
+

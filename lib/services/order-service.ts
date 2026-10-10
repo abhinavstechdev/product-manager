@@ -13,6 +13,8 @@ import {
 import { eq, and, or, sql, desc } from "drizzle-orm";
 import { reserveStockForOrder, releaseStockForOrder, StockActor } from "./inventory-service";
 import { logAuditEvent } from "../audit/audit-service";
+import { dispatchMcpEvent } from "../mcp/events";
+import { getBaseUrl } from "../config/urls";
 
 export interface CreateOrderParams {
   workspaceId: string;
@@ -297,6 +299,19 @@ export async function createOrder(params: CreateOrderParams) {
     });
   }
 
+  // 11. Dispatch MCP Event: order.created
+  dispatchMcpEvent(params.workspaceId, "order.created", {
+    order_id: orderId,
+    order_number: orderNumber,
+    customer_id: resolvedCustomerId,
+    customer_name: params.newCustomer?.name || "Customer",
+    total_amount: totalAmountNum,
+    status: "CONFIRMED",
+    payment_status: initialPaymentStatus,
+    items_count: resolvedItems.length,
+    url: `${getBaseUrl()}/orders#${orderId}`,
+  });
+
   return responseResult;
 }
 
@@ -393,6 +408,15 @@ export async function updateOrderStatus(params: {
     beforeState: { status: prevStatus },
     afterState: { status: params.newStatus },
     outcome: "SUCCESS",
+  });
+
+  // Dispatch MCP Event: order.status_changed
+  dispatchMcpEvent(params.workspaceId, "order.status_changed", {
+    order_id: order.id,
+    order_number: order.orderNumber,
+    previous_status: prevStatus,
+    current_status: params.newStatus,
+    url: `${getBaseUrl()}/orders#${order.id}`,
   });
 
   return {

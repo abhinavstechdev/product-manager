@@ -9,6 +9,9 @@ import * as paymentService from "../lib/services/payment-service";
 import * as reportService from "../lib/services/report-service";
 import * as productService from "../lib/services/product-service";
 import { WebStandardStreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js";
+import http from "http";
+import { Webhook } from "standardwebhooks";
+import { dispatchMcpEvent } from "../lib/mcp/events";
 
 async function runTests() {
   console.log("=== STARTING COMPREHENSIVE PLATFORM VERIFICATION ===");
@@ -320,6 +323,166 @@ async function runTests() {
     throw new Error("render_order_widget missing _meta.ui.resourceUri!");
   }
   console.log("✓ render_order_widget returned _meta.ui.resourceUri for test order");
+
+  // 12.2 Test MCP Events (Protocol version 2026-07-28, server/discover, events/list, events/subscribe, Webhooks, Verification Challenge, events/unsubscribe)
+  console.log("\n--- Testing MCP Events (Protocol 2026-07-28 & ChatGPT Webhooks) ---");
+
+  // Spin up local mock callback endpoint
+  const receivedRequests: Array<{ url: string; headers: any; body: any }> = [];
+  const validSecret = "whsec_" + Buffer.from("01234567890123456789012345678901").toString("base64");
+  const webhookSigner = new Webhook(validSecret);
+
+  const mockServer = http.createServer((req, res) => {
+    let raw = "";
+    req.on("data", (chunk) => (raw += chunk));
+    req.on("end", () => {
+      try {
+        const parsed = JSON.parse(raw);
+        receivedRequests.push({ url: req.url || "/", headers: req.headers, body: parsed });
+        if (parsed.type === "verification") {
+          res.writeHead(200, { "Content-Type": "application/json" });
+          res.end(JSON.stringify({ challenge: parsed.challenge }));
+          return;
+        }
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ status: "accepted" }));
+      } catch (err: any) {
+        res.writeHead(400, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ error: err.message }));
+      }
+    });
+  });
+
+  await new Promise<void>((resolve) => mockServer.listen(0, "127.0.0.1", resolve));
+  const mockPort = (mockServer.address() as any).port;
+  const mockCallbackUrl = `http://127.0.0.1:${mockPort}/mcp-events/webhook`;
+
+  // 1. Test server/discover
+  const discoverData = await sendMcpRequest({
+    jsonrpc: "2.0",
+    id: 80,
+    method: "server/discover",
+    params: {},
+  });
+  console.log("✓ server/discover response:", {
+    supportedVersions: discoverData?.result?.supportedVersions,
+    capabilities: discoverData?.result?.capabilities,
+  });
+  if (!discoverData?.result?.supportedVersions?.includes("2026-07-28")) {
+    throw new Error("server/discover missing 2026-07-28 protocol version!");
+  }
+  if (!discoverData?.result?.capabilities?.events) {
+    throw new Error("server/discover missing capabilities.events!");
+  }
+
+  // 2. Test events/list
+  const eventsListData = await sendMcpRequest({
+    jsonrpc: "2.0",
+    id: 81,
+    method: "events/list",
+    params: {},
+  });
+  const eventNames = eventsListData?.result?.events?.map((e: any) => e.name) || [];
+  console.log("✓ events/list returned events:", eventNames);
+  if (!eventNames.includes("order.created") || !eventNames.includes("order.status_changed") || !eventNames.includes("inventory.low_stock")) {
+    throw new Error("events/list missing core e-commerce events!");
+  }
+
+  // 3. Test events/subscribe with invalid secret (must fail)
+  const invalidSub = await sendMcpRequest({
+    jsonrpc: "2.0",
+    id: 82,
+    method: "events/subscribe",
+    params: {
+      name: "order.created",
+      delivery: {
+        mode: "webhook",
+        url: mockCallbackUrl,
+        secret: "invalid_secret",
+      },
+    },
+  });
+  if (!invalidSub.error) {
+    throw new Error("events/subscribe should reject invalid secret!");
+  }
+  console.log("✓ events/subscribe with invalid secret rejected cleanly");
+
+  // 4. Test events/subscribe with valid secret & challenge verification
+  const validSub = await sendMcpRequest({
+    jsonrpc: "2.0",
+    id: 83,
+    method: "events/subscribe",
+    params: {
+      name: "order.created",
+      arguments: { status: "CONFIRMED" },
+      delivery: {
+        mode: "webhook",
+        url: mockCallbackUrl,
+        secret: validSecret,
+      },
+      ttlMs: 86400000,
+    },
+  });
+  if (!validSub?.result?.id?.startsWith("sub_")) {
+    throw new Error(`Invalid subscription result: ${JSON.stringify(validSub)}`);
+  }
+  console.log("✓ events/subscribe registered subscription ID:", validSub.result.id, "Expires:", validSub.result.refreshBefore);
+
+  // Verify that challenge was sent and signed properly
+  const verificationReq = receivedRequests.find((r) => r.body.type === "verification");
+  if (!verificationReq) {
+    throw new Error("Verification challenge request was not sent to callback URL!");
+  }
+  webhookSigner.verify(JSON.stringify(verificationReq.body), {
+    "webhook-id": verificationReq.headers["webhook-id"],
+    "webhook-timestamp": verificationReq.headers["webhook-timestamp"],
+    "webhook-signature": verificationReq.headers["webhook-signature"],
+  });
+  console.log("✓ Callback challenge request received and HMAC signature verified!");
+
+  // 5. Test Event Dispatch & Webhook Delivery
+  await dispatchMcpEvent(principal.workspaceId, "order.created", {
+    order_id: "ord_evt_verify_123",
+    order_number: "ORD-EVT-001",
+    customer_name: "Priya Sharma",
+    total_amount: 1500,
+    status: "CONFIRMED",
+    payment_status: "PAID",
+    items_count: 2,
+    url: "http://localhost:3000/orders#ord_evt_verify_123",
+  });
+
+  // Small delay for async delivery
+  await new Promise((resolve) => setTimeout(resolve, 300));
+
+  const deliveredEventReq = receivedRequests.find((r) => r.body.name === "order.created");
+  if (!deliveredEventReq) {
+    throw new Error("Webhook delivery for order.created was not received by callback!");
+  }
+  webhookSigner.verify(JSON.stringify(deliveredEventReq.body), {
+    "webhook-id": deliveredEventReq.headers["webhook-id"],
+    "webhook-timestamp": deliveredEventReq.headers["webhook-timestamp"],
+    "webhook-signature": deliveredEventReq.headers["webhook-signature"],
+  });
+  console.log("✓ Webhook event delivered with valid Standard Webhook HMAC signature! Event:", deliveredEventReq.body.name);
+
+  // 6. Test events/unsubscribe
+  const unsubRes = await sendMcpRequest({
+    jsonrpc: "2.0",
+    id: 84,
+    method: "events/unsubscribe",
+    params: {
+      name: "order.created",
+      arguments: { status: "CONFIRMED" },
+      delivery: {
+        mode: "webhook",
+        url: mockCallbackUrl,
+      },
+    },
+  });
+  console.log("✓ events/unsubscribe processed successfully:", unsubRes.result);
+
+  mockServer.close();
 
   // 13. Test ChatGPT MCP Compliant Destructive Deletion Tools
   console.log("\n--- Testing Destructive Deletion Tools (ChatGPT MCP Guide Compliance) ---");

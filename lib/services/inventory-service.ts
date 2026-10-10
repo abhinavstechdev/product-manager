@@ -2,6 +2,8 @@ import { getDb } from "../db/client";
 import { products, inventoryTransactions } from "../db/schema";
 import { eq, and, sql } from "drizzle-orm";
 import { logAuditEvent } from "../audit/audit-service";
+import { dispatchMcpEvent } from "../mcp/events";
+import { getBaseUrl } from "../config/urls";
 
 export interface StockActor {
   id: string;
@@ -82,6 +84,30 @@ export async function adjustInventory(params: {
     afterState: { physicalStock: newQty, reservedStock: product.reservedStock },
     outcome: "SUCCESS",
   });
+
+  // Dispatch MCP Events
+  dispatchMcpEvent(params.workspaceId, "inventory.adjusted", {
+    transaction_id: txId,
+    sku: product.sku,
+    product_name: product.name,
+    type: txType,
+    quantity_change: params.quantityChange,
+    new_physical_stock: newQty,
+    notes: params.reason,
+  });
+
+  if (newAvailable <= 10) {
+    dispatchMcpEvent(params.workspaceId, "inventory.low_stock", {
+      product_id: product.id,
+      sku: product.sku,
+      name: product.name,
+      physical_stock: newQty,
+      reserved_stock: product.reservedStock,
+      available_stock: newAvailable,
+      threshold: 10,
+      url: `${getBaseUrl()}/products#${product.id}`,
+    });
+  }
 
   return {
     productId: product.id,

@@ -3,6 +3,8 @@ import { orders, shipments, orderItems, customers, orderStatusHistory } from "..
 import { eq, and, sql, desc } from "drizzle-orm";
 import { dispatchStockForOrder, StockActor } from "./inventory-service";
 import { logAuditEvent } from "../audit/audit-service";
+import { dispatchMcpEvent } from "../mcp/events";
+import { getBaseUrl } from "../config/urls";
 
 export async function listOrdersToShip(workspaceId: string) {
   const db = await getDb();
@@ -125,6 +127,16 @@ export async function markOrderShipped(params: {
     outcome: "SUCCESS",
   });
 
+  dispatchMcpEvent(params.workspaceId, "order.status_changed", {
+    order_id: order.id,
+    order_number: order.orderNumber,
+    previous_status: "PACKED",
+    current_status: "SHIPPED",
+    tracking_number: params.trackingNumber,
+    courier: params.courier,
+    url: `${getBaseUrl()}/orders#${order.id}`,
+  });
+
   return {
     orderId: order.id,
     orderNumber: order.orderNumber,
@@ -192,6 +204,14 @@ export async function markOrderDelivered(params: {
     beforeState: { status: "SHIPPED" },
     afterState: { status: "DELIVERED" },
     outcome: "SUCCESS",
+  });
+
+  dispatchMcpEvent(params.workspaceId, "order.status_changed", {
+    order_id: order.id,
+    order_number: order.orderNumber,
+    previous_status: "SHIPPED",
+    current_status: "DELIVERED",
+    url: `${getBaseUrl()}/orders#${order.id}`,
   });
 
   return {

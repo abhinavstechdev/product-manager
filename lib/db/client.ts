@@ -127,6 +127,25 @@ export async function ensureSchemaAndSeed(database: AppDatabase) {
       }
     }
 
+    // Ensure event_subscriptions table exists
+    try {
+      await (database as any).execute(sql`
+        CREATE TABLE IF NOT EXISTS event_subscriptions (
+          id text PRIMARY KEY,
+          workspace_id text NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+          client_id text NOT NULL,
+          event_name text NOT NULL,
+          arguments text NOT NULL DEFAULT '{}',
+          callback_url text NOT NULL,
+          secret text NOT NULL,
+          active boolean NOT NULL DEFAULT true,
+          refresh_before timestamp with time zone NOT NULL,
+          created_at timestamp with time zone NOT NULL DEFAULT now(),
+          updated_at timestamp with time zone NOT NULL DEFAULT now()
+        );
+      `);
+    } catch {}
+
     // Now seed default workspace and initial data if empty
     await seedInitialData(database);
   } catch (err) {

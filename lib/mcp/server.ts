@@ -17,6 +17,7 @@ import { getDb } from "../db/client";
 import { auditEvents, orders, products, workspaces } from "../db/schema";
 import { eq, desc } from "drizzle-orm";
 import { registerSkillsExtension } from "./skills";
+import { registerEventsExtension } from "./events";
 import { getBaseUrl } from "../config/urls";
 import {
   DASHBOARD_WIDGET_URI,
@@ -35,15 +36,16 @@ export function createMcpServer(principal: McpAuthPrincipal) {
     },
     {
       instructions:
-        "Apex Inventory & Order Management Platform. Core rules: Available stock = Physical - Reserved. Always verify product SKU using get_product or search before creating orders or adjustments. Destructive operations (delete_product, delete_order, delete_customer, delete_category, delete_payment, delete_return, factory_reset) and high-impact operations (negative stock adjustments, order cancellations) require confirmation in compliance with the ChatGPT MCP specification. Factory reset (factory_reset) requires asking the operator for the master security password ('Aezakmi@ff135') before execution. Packing slips exclude customer payment details. Delivered status does not mark order as paid. Use get_user_profile to identify operator context. For UI, follow the decoupled pattern: call data tools (get_dashboard_summary, list_products, get_order) to fetch data, then render tools (render_dashboard_widget, render_products_widget, render_order_widget) to display interactive components.",
+        "Apex Inventory & Order Management Platform. Core rules: Available stock = Physical - Reserved. Always verify product SKU using get_product or search before creating orders or adjustments. Destructive operations (delete_product, delete_order, delete_customer, delete_category, delete_payment, delete_return, factory_reset) and high-impact operations (negative stock adjustments, order cancellations) require confirmation in compliance with the ChatGPT MCP specification. Factory reset (factory_reset) requires asking the operator for the master security password ('Aezakmi@ff135') before execution. Packing slips exclude customer payment details. Delivered status does not mark order as paid. Use get_user_profile to identify operator context. For UI, follow the decoupled pattern: call data tools (get_dashboard_summary, list_products, get_order) to fetch data, then render tools (render_dashboard_widget, render_products_widget, render_order_widget) to display interactive components. For real-time updates and notifications, MCP Events (protocol version 2026-07-28) allows ChatGPT to subscribe to updates (order.created, order.status_changed, inventory.low_stock, inventory.adjusted, return.requested) via signed webhooks.",
       capabilities: {
         tools: { listChanged: true },
         resources: { subscribe: false, listChanged: true },
         prompts: { listChanged: true },
+        events: {},
         extensions: {
           "io.modelcontextprotocol/skills": {},
         },
-      },
+      } as any,
     }
   );
 
@@ -2268,6 +2270,9 @@ export function createMcpServer(principal: McpAuthPrincipal) {
 
   // Register OpenAI Skills Extension (SEP-2640)
   registerSkillsExtension(server);
+
+  // Register MCP Events Extension (Protocol version 2026-07-28 / ChatGPT MCP Events)
+  registerEventsExtension(server, principal);
 
   return server;
 }

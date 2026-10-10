@@ -4,6 +4,8 @@ import { eq, and, sql, desc } from "drizzle-orm";
 import { StockActor } from "./inventory-service";
 import { updateOrderStatus } from "./order-service";
 import { logAuditEvent } from "../audit/audit-service";
+import { dispatchMcpEvent } from "../mcp/events";
+import { getBaseUrl } from "../config/urls";
 
 export async function registerReturn(params: {
   workspaceId: string;
@@ -67,6 +69,15 @@ export async function registerReturn(params: {
     targetRecord: order.orderNumber,
     afterState: { returnId, reason: params.reason, itemCount: params.items.length },
     outcome: "SUCCESS",
+  });
+
+  dispatchMcpEvent(params.workspaceId, "return.requested", {
+    return_id: returnId,
+    order_id: order.id,
+    reason: params.reason,
+    condition: params.items[0]?.condition || "sellable",
+    items_count: params.items.length,
+    url: `${getBaseUrl()}/returns#${returnId}`,
   });
 
   return {
