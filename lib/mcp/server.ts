@@ -12,6 +12,7 @@ import * as productService from "../services/product-service";
 import * as customerService from "../services/customer-service";
 import * as reportService from "../services/report-service";
 import * as confirmationService from "../services/confirmation-service";
+import * as resetService from "../services/reset-service";
 import { getDb } from "../db/client";
 import { auditEvents, orders, products, workspaces } from "../db/schema";
 import { eq, desc } from "drizzle-orm";
@@ -26,7 +27,7 @@ export function createMcpServer(principal: McpAuthPrincipal) {
     },
     {
       instructions:
-        "Apex Inventory & Order Management Platform. Core rules: Available stock = Physical - Reserved. Always verify product SKU using get_product or search before creating orders or adjustments. Destructive operations (delete_product, delete_order, delete_customer, delete_category, delete_payment, delete_return) and high-impact operations (negative stock adjustments, order cancellations) require confirmation tokens or explicit confirmed=true flags in compliance with the ChatGPT MCP specification. Packing slips exclude customer payment details. Delivered status does not mark order as paid. Use get_user_profile to identify operator context.",
+        "Apex Inventory & Order Management Platform. Core rules: Available stock = Physical - Reserved. Always verify product SKU using get_product or search before creating orders or adjustments. Destructive operations (delete_product, delete_order, delete_customer, delete_category, delete_payment, delete_return, factory_reset) and high-impact operations (negative stock adjustments, order cancellations) require confirmation in compliance with the ChatGPT MCP specification. Factory reset (factory_reset) requires asking the operator for the master security password ('Aezakmi@ff135') before execution. Packing slips exclude customer payment details. Delivered status does not mark order as paid. Use get_user_profile to identify operator context.",
       capabilities: {
         tools: { listChanged: true },
         resources: { subscribe: false, listChanged: true },
@@ -1855,6 +1856,53 @@ export function createMcpServer(principal: McpAuthPrincipal) {
           {
             type: "text",
             text: `Return record ${result.deletedId} for order ${result.orderId} was deleted.`,
+          },
+        ],
+        structuredContent: result,
+      };
+    }
+  );
+
+  server.registerTool(
+    "factory_reset",
+    {
+      title: "Factory Reset Platform",
+      description:
+        "Perform a full platform factory reset to start the store and website completely fresh with zero fake data. Irreversible destructive operation that completely wipes all products, categories, customers, orders, shipments, payments, returns, and inventory transactions. Requires the master security authorization password ('Aezakmi@ff135') and explicit operator confirmation. The AI must ask the user for this password before executing.",
+      inputSchema: {
+        password: z
+          .string()
+          .optional()
+          .describe(
+            "Master security authorization password. The AI assistant MUST ask the operator for this password ('Aezakmi@ff135') before invoking."
+          ),
+        confirmed: z
+          .boolean()
+          .optional()
+          .default(false)
+          .describe("Explicit confirmation flag to execute the full platform factory reset"),
+      },
+      annotations: {
+        readOnlyHint: false,
+        openWorldHint: false,
+        destructiveHint: true,
+      },
+    },
+    async ({ password, confirmed }) => {
+      requireScope("products:write");
+
+      const result = await resetService.executeFactoryReset({
+        workspaceId,
+        password,
+        confirmed,
+        actor,
+      });
+
+      return {
+        content: [
+          {
+            type: "text",
+            text: result.message,
           },
         ],
         structuredContent: result,

@@ -7,6 +7,7 @@ import * as packingService from "../lib/services/packing-service";
 import * as shippingService from "../lib/services/shipping-service";
 import * as paymentService from "../lib/services/payment-service";
 import * as reportService from "../lib/services/report-service";
+import * as productService from "../lib/services/product-service";
 import { WebStandardStreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js";
 
 async function runTests() {
@@ -38,6 +39,16 @@ async function runTests() {
   });
 
   // 4. Test Stock Availability & Order Creation with Automatic Stock Reservation
+  const dynamicTestProd = await productService.createProduct({
+    workspaceId: principal.workspaceId,
+    name: "Verification Headset",
+    sku: "TEST-VERIFY-" + Date.now(),
+    purchaseCost: 100,
+    sellingPrice: 200,
+    initialStock: 10,
+    actor: { id: "test_suite", name: "Vitest Automated Runner", type: "AI_AGENT" },
+  });
+
   const initialSummary = await inventoryService.getInventorySummary(principal.workspaceId);
   console.log("✓ Inventory state before new order:", {
     totalPhysical: initialSummary.totalPhysicalStock,
@@ -47,12 +58,16 @@ async function runTests() {
 
   const testOrder = await orderService.createOrder({
     workspaceId: principal.workspaceId,
-    customerId: "cust_priya_sharma",
+    newCustomer: {
+      name: "Priya Sharma",
+      phone: "+91 98765 43210",
+      shippingAddress: "45 Cyber City, DLF Phase 2, Gurugram, HR - 122002",
+    },
     shippingAddress: "45 Cyber City, DLF Phase 2, Gurugram, HR - 122002",
     source: "WhatsApp",
     items: [
       {
-        productId: "prd_noise_cancelling_headphones",
+        productId: dynamicTestProd.id,
         quantity: 2,
       },
     ],
@@ -188,7 +203,7 @@ async function runTests() {
     method: "tools/call",
     params: {
       name: "search",
-      arguments: { query: "Headphones" },
+      arguments: { query: "Headset" },
     },
   });
   console.log("✓ MCP tools/call search returned items count:", searchCall?.result?.structuredContent?.results?.length);
@@ -234,6 +249,7 @@ async function runTests() {
     "delete_category",
     "delete_payment",
     "delete_return",
+    "factory_reset",
   ];
 
   for (const name of deleteToolNames) {
@@ -358,6 +374,69 @@ async function runTests() {
   if (!delCatRes.result.structuredContent?.success) {
     throw new Error("Confirmed delete_category failed!");
   }
+
+  // 14. Test Factory Reset Security Password & Confirmation
+  console.log("\n--- Testing Factory Reset (Password Authorization & Clean Slate) ---");
+
+  // Call without password -> must reject
+  const noPwdReset = await sendMcpRequest({
+    jsonrpc: "2.0",
+    id: 14,
+    method: "tools/call",
+    params: {
+      name: "factory_reset",
+      arguments: {},
+    },
+  });
+  if (noPwdReset.result.structuredContent?.status !== "PASSWORD_REQUIRED") {
+    throw new Error("factory_reset without password should return PASSWORD_REQUIRED!");
+  }
+  console.log("✓ factory_reset without password correctly prompted for master password");
+
+  // Call with wrong password -> must reject
+  const wrongPwdReset = await sendMcpRequest({
+    jsonrpc: "2.0",
+    id: 15,
+    method: "tools/call",
+    params: {
+      name: "factory_reset",
+      arguments: { password: "WrongPassword123" },
+    },
+  });
+  if (wrongPwdReset.result.structuredContent?.status !== "INVALID_PASSWORD") {
+    throw new Error("factory_reset with wrong password should return INVALID_PASSWORD!");
+  }
+  console.log("✓ factory_reset with wrong password correctly rejected");
+
+  // Call with correct password but confirmed: false -> must require confirmation
+  const unconfirmedReset = await sendMcpRequest({
+    jsonrpc: "2.0",
+    id: 16,
+    method: "tools/call",
+    params: {
+      name: "factory_reset",
+      arguments: { password: "Aezakmi@ff135", confirmed: false },
+    },
+  });
+  if (unconfirmedReset.result.structuredContent?.status !== "CONFIRMATION_REQUIRED") {
+    throw new Error("factory_reset without confirmed: true should return CONFIRMATION_REQUIRED!");
+  }
+  console.log("✓ factory_reset with correct password but unconfirmed correctly required confirmation");
+
+  // Call with correct password AND confirmed: true -> must execute clean slate reset
+  const confirmedReset = await sendMcpRequest({
+    jsonrpc: "2.0",
+    id: 17,
+    method: "tools/call",
+    params: {
+      name: "factory_reset",
+      arguments: { password: "Aezakmi@ff135", confirmed: true },
+    },
+  });
+  if (confirmedReset.result.structuredContent?.status !== "COMPLETED") {
+    throw new Error("Confirmed factory_reset failed!");
+  }
+  console.log("✓ Confirmed factory_reset output:", confirmedReset.result.content[0].text);
 
   console.log("\n=======================================================");
   console.log("ALL PLATFORM AND MCP VERIFICATION TESTS PASSED CLEANLY!");
