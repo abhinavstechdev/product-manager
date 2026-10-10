@@ -16,6 +16,29 @@ import { logAuditEvent } from "../audit/audit-service";
 import { dispatchMcpEvent } from "../mcp/events";
 import { getBaseUrl } from "../config/urls";
 
+export type OrderErrorCode =
+  | "INVALID_ARGUMENT"
+  | "CUSTOMER_NOT_FOUND"
+  | "PRODUCT_NOT_FOUND"
+  | "INSUFFICIENT_STOCK"
+  | "PRICE_CHANGED"
+  | "PAYMENT_VERIFICATION_REQUIRED"
+  | "CONFIRMATION_REQUIRED"
+  | "DUPLICATE_REQUEST"
+  | "PERMISSION_DENIED"
+  | "INTERNAL_ERROR";
+
+export class OrderServiceError extends Error {
+  constructor(
+    public readonly code: OrderErrorCode,
+    message: string,
+    public readonly details?: Record<string, any>
+  ) {
+    super(message);
+    this.name = "OrderServiceError";
+  }
+}
+
 export interface CreateOrderParams {
   workspaceId: string;
   customerId?: string | null;
@@ -23,11 +46,11 @@ export interface CreateOrderParams {
     name: string;
     phone?: string | null;
     email?: string | null;
-    shippingAddress: string;
+    shippingAddress?: string | null;
     notes?: string | null;
   } | null;
-  shippingAddress?: string;
-  source: string;
+  shippingAddress?: string | null;
+  source?: string;
   items: Array<{
     productId: string;
     quantity: number;
@@ -38,10 +61,13 @@ export interface CreateOrderParams {
   shippingFee?: number;
   paymentMethod?: string;
   paymentStatus?: "UNPAID" | "PARTIALLY_PAID" | "PAID";
+  paymentReference?: string | null;
+  paymentReportedByCustomer?: boolean;
   initialPaymentAmount?: number;
   packingNotes?: string | null;
   notes?: string | null;
   idempotencyKey?: string | null;
+  confirmed?: boolean;
   actor: StockActor;
   sourceType: "web" | "mcp";
 }
@@ -74,7 +100,34 @@ export async function generateOrderNumber(workspaceId: string): Promise<string> 
 export async function createOrder(params: CreateOrderParams) {
   const db = await getDb();
 
-  // 1. Idempotency Check
+  // 1. Validate Items Argument
+  if (!params.items || !Array.isArray(params.items) || params.items.length === 0) {
+    throw new OrderServiceError("INVALID_ARGUMENT", "Order must contain at least one item.");
+  }
+
+  for (const it of params.items) {
+    if (!it.productId || typeof it.productId !== "string" || it.productId.trim().length === 0) {
+      throw new OrderServiceError("INVALID_ARGUMENT", "Each item must specify a valid productId.");
+    }
+    if (!it.quantity || typeof it.quantity !== "number" || it.quantity <= 0 || !Number.isInteger(it.quantity)) {
+      throw new OrderServiceError("INVALID_ARGUMENT", `Invalid quantity '${it.quantity}' for product '${it.productId}'. Must be a positive integer.`);
+    }
+    if (it.unitPrice !== undefined && (typeof it.unitPrice !== "number" || it.unitPrice < 0)) {
+      throw new OrderServiceError("INVALID_ARGUMENT", `Invalid unitPrice '${it.unitPrice}' for product '${it.productId}'. Cannot be negative.`);
+    }
+    if (it.discount !== undefined && (typeof it.discount !== "number" || it.discount < 0)) {
+      throw new OrderServiceError("INVALID_ARGUMENT", `Invalid discount '${it.discount}' for product '${it.productId}'. Cannot be negative.`);
+    }
+  }
+
+  if (params.orderDiscount !== undefined && (typeof params.orderDiscount !== "number" || params.orderDiscount < 0)) {
+    throw new OrderServiceError("INVALID_ARGUMENT", "Order discount cannot be negative.");
+  }
+  if (params.shippingFee !== undefined && (typeof params.shippingFee !== "number" || params.shippingFee < 0)) {
+    throw new OrderServiceError("INVALID_ARGUMENT", "Shipping fee cannot be negative.");
+  }
+
+  // 2. Idempotency Check
   if (params.idempotencyKey) {
     const [existingIdemp] = await (db as any)
       .select()
@@ -88,32 +141,38 @@ export async function createOrder(params: CreateOrderParams) {
       .limit(1);
 
     if (existingIdemp) {
-      return JSON.parse(existingIdemp.responseBody);
+      try {
+        const cachedOrder = JSON.parse(existingIdemp.responseBody);
+        // Verify that the cached order corresponds to matching customer & items
+        const sameCustomer = params.customerId ? cachedOrder.customerId === params.customerId : true;
+        const cachedItems = cachedOrder.items || [];
+        const sameItemCount = cachedItems.length === params.items.length;
+        const sameItems = sameItemCount && params.items.every((it) => {
+          const match = cachedItems.find((ci: any) => ci.productId === it.productId);
+          return match && match.quantity === it.quantity;
+        });
+
+        if (sameCustomer && sameItems) {
+          return cachedOrder;
+        } else {
+          throw new OrderServiceError(
+            "DUPLICATE_REQUEST",
+            `Idempotency key '${params.idempotencyKey}' was already used for a different order. Reusing keys with modified parameters is rejected.`,
+            { idempotencyKey: params.idempotencyKey }
+          );
+        }
+      } catch (e) {
+        if (e instanceof OrderServiceError) throw e;
+        return JSON.parse(existingIdemp.responseBody);
+      }
     }
   }
 
-  // 2. Resolve Customer
-  let resolvedCustomerId = params.customerId;
-  let resolvedShippingAddress = params.shippingAddress || "";
+  // 3. Resolve & Validate Customer
+  let resolvedCustomerId = params.customerId || null;
+  let resolvedShippingAddress = params.shippingAddress ? params.shippingAddress.trim() : "";
 
-  if (!resolvedCustomerId && params.newCustomer) {
-    const newCustId = `cust_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
-    await (db as any).insert(customers).values({
-      id: newCustId,
-      workspaceId: params.workspaceId,
-      name: params.newCustomer.name,
-      phone: params.newCustomer.phone || null,
-      email: params.newCustomer.email || null,
-      shippingAddress: params.newCustomer.shippingAddress,
-      notes: params.newCustomer.notes || null,
-      createdAt: new Date(),
-      updatedAt: new Date(),
-    });
-    resolvedCustomerId = newCustId;
-    if (!resolvedShippingAddress) {
-      resolvedShippingAddress = params.newCustomer.shippingAddress;
-    }
-  } else if (resolvedCustomerId) {
+  if (resolvedCustomerId) {
     const [cust] = await (db as any)
       .select()
       .from(customers)
@@ -121,16 +180,42 @@ export async function createOrder(params: CreateOrderParams) {
       .limit(1);
 
     if (!cust) {
-      throw new Error(`Customer not found: ${resolvedCustomerId}`);
+      throw new OrderServiceError(
+        "CUSTOMER_NOT_FOUND",
+        `Customer with ID '${resolvedCustomerId}' does not exist in workspace.`,
+        { customerId: resolvedCustomerId }
+      );
     }
     if (!resolvedShippingAddress) {
-      resolvedShippingAddress = cust.shippingAddress;
+      resolvedShippingAddress = cust.shippingAddress || "";
+    }
+    if (!resolvedShippingAddress || resolvedShippingAddress.length < 5) {
+      throw new OrderServiceError(
+        "INVALID_ARGUMENT",
+        `Customer '${cust.name}' has no valid shipping address on file. Please supply shippingAddress with at least 5 characters.`
+      );
+    }
+  } else if (params.newCustomer) {
+    if (!params.newCustomer.name || params.newCustomer.name.trim().length === 0) {
+      throw new OrderServiceError("INVALID_ARGUMENT", "New customer name is required.");
+    }
+    if (!resolvedShippingAddress && params.newCustomer.shippingAddress) {
+      resolvedShippingAddress = params.newCustomer.shippingAddress.trim();
+    }
+    if (!resolvedShippingAddress || resolvedShippingAddress.length < 5) {
+      throw new OrderServiceError(
+        "INVALID_ARGUMENT",
+        "Valid shipping address (min 5 characters) is required for new customer."
+      );
     }
   } else {
-    throw new Error("Either customerId or newCustomer details must be provided.");
+    throw new OrderServiceError(
+      "INVALID_ARGUMENT",
+      "Either an existing customerId or newCustomer details (newCustomerName and shippingAddress) must be provided."
+    );
   }
 
-  // 3. Resolve Items and Calculate Totals
+  // 4. Resolve Products, Compare Prices, and Verify Stock
   const resolvedItems: Array<{
     productId: string;
     sku: string;
@@ -151,10 +236,58 @@ export async function createOrder(params: CreateOrderParams) {
       .limit(1);
 
     if (!prod) {
-      throw new Error(`Product not found: ${item.productId}`);
+      throw new OrderServiceError(
+        "PRODUCT_NOT_FOUND",
+        `Product '${item.productId}' does not exist in this catalog.`,
+        { productId: item.productId }
+      );
     }
 
-    const unitPriceNum = item.unitPrice !== undefined ? item.unitPrice : parseFloat(prod.sellingPrice);
+    if (!prod.isActive) {
+      throw new OrderServiceError(
+        "PRODUCT_NOT_FOUND",
+        `Product '${prod.name}' (SKU: ${prod.sku}) is currently inactive and cannot be ordered.`,
+        { productId: prod.id, sku: prod.sku }
+      );
+    }
+
+    const currentCatalogPrice = parseFloat(prod.sellingPrice || "0");
+
+    // Price verification check
+    if (item.unitPrice !== undefined && item.unitPrice !== null) {
+      if (Math.abs(item.unitPrice - currentCatalogPrice) > 0.001) {
+        throw new OrderServiceError(
+          "PRICE_CHANGED",
+          `Price mismatch for product '${prod.name}' (SKU: ${prod.sku}). Client expected unit price ₹${item.unitPrice}, but current database catalog price is ₹${currentCatalogPrice}.`,
+          {
+            productId: prod.id,
+            sku: prod.sku,
+            clientUnitPrice: item.unitPrice,
+            currentSellingPrice: currentCatalogPrice,
+          }
+        );
+      }
+    }
+
+    // Available stock check: Available = Physical - Reserved
+    const availableStock = prod.physicalStock - prod.reservedStock;
+    if (availableStock < item.quantity) {
+      throw new OrderServiceError(
+        "INSUFFICIENT_STOCK",
+        `Insufficient available stock for SKU ${prod.sku} (${prod.name}). Requested: ${item.quantity}, Available: ${availableStock} (Physical: ${prod.physicalStock}, Reserved: ${prod.reservedStock}).`,
+        {
+          productId: prod.id,
+          sku: prod.sku,
+          productName: prod.name,
+          requestedQuantity: item.quantity,
+          availableStock,
+          physicalStock: prod.physicalStock,
+          reservedStock: prod.reservedStock,
+        }
+      );
+    }
+
+    const unitPriceNum = currentCatalogPrice;
     const itemDiscountNum = item.discount || 0;
     const itemTotalNum = Math.max(0, unitPriceNum * item.quantity - itemDiscountNum);
 
@@ -171,6 +304,35 @@ export async function createOrder(params: CreateOrderParams) {
     });
   }
 
+  // 5. Payment Verification & Reported Status Handling
+  let finalPaymentStatus: "UNPAID" | "PARTIALLY_PAID" | "PAID" = "UNPAID";
+  let internalNotes = params.notes || "";
+  const paymentMethod = params.paymentMethod || "Cash on Delivery";
+
+  if (params.paymentStatus === "PAID") {
+    if (params.paymentReference && params.paymentReference.trim().length > 0) {
+      // Verified payment with transaction proof/reference
+      finalPaymentStatus = "PAID";
+      internalNotes = `[VERIFIED PAYMENT] Ref: ${params.paymentReference.trim()} via ${paymentMethod}. ${internalNotes}`.trim();
+    } else if (params.paymentReportedByCustomer) {
+      // Customer reports paid (e.g. via UPI), but independent verification is pending
+      finalPaymentStatus = "UNPAID";
+      internalNotes = `[PAYMENT REPORTED BY CUSTOMER - PENDING VERIFICATION] Customer reported payment via ${paymentMethod}. Verification required before fulfillment. ${internalNotes}`.trim();
+    } else if (params.confirmed) {
+      // Explicit operator confirmation to record as paid
+      finalPaymentStatus = "PAID";
+      internalNotes = `[OPERATOR CONFIRMED PAYMENT] Marked PAID by operator via ${paymentMethod}. ${internalNotes}`.trim();
+    } else {
+      throw new OrderServiceError(
+        "PAYMENT_VERIFICATION_REQUIRED",
+        `Payment status 'PAID' requires an independent payment verification reference (paymentReference) or explicit operator confirmation. For unverified customer reports, specify paymentReportedByCustomer: true to record as pending verification.`,
+        { paymentStatus: "PAID", paymentMethod }
+      );
+    }
+  } else if (params.paymentStatus === "PARTIALLY_PAID") {
+    finalPaymentStatus = "PARTIALLY_PAID";
+  }
+
   const orderDiscountNum = params.orderDiscount || 0;
   const shippingFeeNum = params.shippingFee || 0;
   const totalAmountNum = Math.max(0, subtotalNum - orderDiscountNum + shippingFeeNum);
@@ -178,82 +340,141 @@ export async function createOrder(params: CreateOrderParams) {
   const orderId = `ord_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
   const orderNumber = await generateOrderNumber(params.workspaceId);
 
-  // 4. Reserve stock atomically
-  await reserveStockForOrder({
-    workspaceId: params.workspaceId,
-    orderId,
-    orderNumber,
-    items: params.items.map((it) => ({ productId: it.productId, quantity: it.quantity })),
-    actor: params.actor,
-  });
+  // 6. Execute Everything Atomically in a Database Transaction
+  const responseResult = await (db as any).transaction(async (tx: any) => {
+    // A. Create new customer if needed
+    if (!resolvedCustomerId && params.newCustomer) {
+      const newCustId = `cust_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
+      await tx.insert(customers).values({
+        id: newCustId,
+        workspaceId: params.workspaceId,
+        name: params.newCustomer.name.trim(),
+        phone: params.newCustomer.phone?.trim() || null,
+        email: params.newCustomer.email?.trim() || null,
+        shippingAddress: resolvedShippingAddress,
+        notes: params.newCustomer.notes?.trim() || null,
+        createdAt: new Date(),
+        updatedAt: new Date(),
+      });
+      resolvedCustomerId = newCustId;
+    }
 
-  // 5. Insert Order
-  const initialPaymentStatus = params.paymentStatus || "UNPAID";
-  await (db as any).insert(orders).values({
-    id: orderId,
-    workspaceId: params.workspaceId,
-    orderNumber,
-    customerId: resolvedCustomerId,
-    shippingAddress: resolvedShippingAddress,
-    source: params.source || "WhatsApp",
-    status: "CONFIRMED", // Order starts confirmed with inventory reserved
-    subtotal: subtotalNum.toFixed(2),
-    discount: orderDiscountNum.toFixed(2),
-    shippingFee: shippingFeeNum.toFixed(2),
-    totalAmount: totalAmountNum.toFixed(2),
-    paymentStatus: initialPaymentStatus,
-    paymentMethod: params.paymentMethod || "Cash on Delivery",
-    packingNotes: params.packingNotes || null,
-    notes: params.notes || null,
-    idempotencyKey: params.idempotencyKey || null,
-    createdAt: new Date(),
-    updatedAt: new Date(),
-  });
+    // B. Concurrency-safe Stock Reservation
+    try {
+      await reserveStockForOrder({
+        workspaceId: params.workspaceId,
+        orderId,
+        orderNumber,
+        items: params.items.map((it) => ({ productId: it.productId, quantity: it.quantity })),
+        actor: params.actor,
+        tx,
+      });
+    } catch (err: any) {
+      if (err.message && err.message.includes("Insufficient available stock")) {
+        throw new OrderServiceError("INSUFFICIENT_STOCK", err.message);
+      }
+      throw err;
+    }
 
-  // 6. Insert Order Items
-  for (const it of resolvedItems) {
-    const itemId = `oi_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
-    await (db as any).insert(orderItems).values({
-      id: itemId,
-      orderId,
-      productId: it.productId,
-      sku: it.sku,
-      productName: it.productName,
-      quantity: it.quantity,
-      unitPrice: it.unitPrice,
-      discount: it.discount,
-      totalPrice: it.totalPrice,
-    });
-  }
-
-  // 7. Status History
-  await (db as any).insert(orderStatusHistory).values({
-    id: `osh_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
-    orderId,
-    prevStatus: null,
-    newStatus: "CONFIRMED",
-    actorId: params.actor.id,
-    actorName: params.actor.name,
-    source: params.sourceType,
-    note: "Order created and stock reserved",
-    createdAt: new Date(),
-  });
-
-  // 8. If initial payment recorded
-  if (params.initialPaymentAmount && params.initialPaymentAmount > 0) {
-    await (db as any).insert(payments).values({
-      id: `pay_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
+    // C. Insert Order Record
+    await tx.insert(orders).values({
+      id: orderId,
       workspaceId: params.workspaceId,
+      orderNumber,
+      customerId: resolvedCustomerId,
+      shippingAddress: resolvedShippingAddress,
+      source: params.source || "WhatsApp",
+      status: "CONFIRMED", // Confirmed with stock reserved
+      subtotal: subtotalNum.toFixed(2),
+      discount: orderDiscountNum.toFixed(2),
+      shippingFee: shippingFeeNum.toFixed(2),
+      totalAmount: totalAmountNum.toFixed(2),
+      paymentStatus: finalPaymentStatus,
+      paymentMethod,
+      packingNotes: params.packingNotes || null,
+      notes: internalNotes || null,
+      idempotencyKey: params.idempotencyKey || null,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    });
+
+    // D. Insert Order Items
+    for (const it of resolvedItems) {
+      const itemId = `oi_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
+      await tx.insert(orderItems).values({
+        id: itemId,
+        orderId,
+        productId: it.productId,
+        sku: it.sku,
+        productName: it.productName,
+        quantity: it.quantity,
+        unitPrice: it.unitPrice,
+        discount: it.discount,
+        totalPrice: it.totalPrice,
+      });
+    }
+
+    // E. Insert Order Status History
+    await tx.insert(orderStatusHistory).values({
+      id: `osh_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
       orderId,
-      amount: params.initialPaymentAmount.toFixed(2),
-      paymentMethod: params.paymentMethod || "Cash",
-      reference: "Initial Payment",
-      notes: "Recorded at order creation",
+      prevStatus: null,
+      newStatus: "CONFIRMED",
+      actorId: params.actor.id,
+      actorName: params.actor.name,
+      source: params.sourceType,
+      note: "Order created and stock reserved",
       createdAt: new Date(),
     });
-  }
 
-  // 9. Audit event
+    // F. Record Verified Payment if applicable
+    if (finalPaymentStatus === "PAID" && (params.paymentReference || params.initialPaymentAmount)) {
+      const payAmount = (params.initialPaymentAmount || totalAmountNum).toFixed(2);
+      await tx.insert(payments).values({
+        id: `pay_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
+        workspaceId: params.workspaceId,
+        orderId,
+        amount: payAmount,
+        paymentMethod,
+        reference: params.paymentReference || "Verified at order creation",
+        notes: internalNotes,
+        createdAt: new Date(),
+      });
+    }
+
+    const orderOutput = {
+      orderId,
+      orderNumber,
+      customerId: resolvedCustomerId,
+      shippingAddress: resolvedShippingAddress,
+      status: "CONFIRMED",
+      subtotal: subtotalNum.toFixed(2),
+      discount: orderDiscountNum.toFixed(2),
+      shippingFee: shippingFeeNum.toFixed(2),
+      totalAmount: totalAmountNum.toFixed(2),
+      paymentStatus: finalPaymentStatus,
+      paymentMethod,
+      items: resolvedItems,
+      inventoryReserved: true,
+    };
+
+    // G. Store Idempotency Record
+    if (params.idempotencyKey) {
+      await tx.insert(idempotencyRecords).values({
+        id: `idemp_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
+        workspaceId: params.workspaceId,
+        idempotencyKey: params.idempotencyKey,
+        operation: "CREATE_ORDER",
+        responseStatus: 201,
+        responseBody: JSON.stringify(orderOutput),
+        createdAt: new Date(),
+      });
+    }
+
+    return orderOutput;
+  });
+
+  // 7. Post-Commit Audit Log & MCP Events
   await logAuditEvent({
     workspaceId: params.workspaceId,
     actorId: params.actor.id,
@@ -267,39 +488,12 @@ export async function createOrder(params: CreateOrderParams) {
       orderNumber,
       totalAmount: totalAmountNum,
       itemCount: resolvedItems.length,
+      paymentStatus: finalPaymentStatus,
     },
     outcome: "SUCCESS",
     idempotencyKey: params.idempotencyKey || null,
   });
 
-  const responseResult = {
-    orderId,
-    orderNumber,
-    customerId: resolvedCustomerId,
-    shippingAddress: resolvedShippingAddress,
-    status: "CONFIRMED",
-    subtotal: subtotalNum.toFixed(2),
-    discount: orderDiscountNum.toFixed(2),
-    shippingFee: shippingFeeNum.toFixed(2),
-    totalAmount: totalAmountNum.toFixed(2),
-    paymentStatus: initialPaymentStatus,
-    items: resolvedItems,
-  };
-
-  // 10. Record Idempotency Key
-  if (params.idempotencyKey) {
-    await (db as any).insert(idempotencyRecords).values({
-      id: `idemp_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
-      workspaceId: params.workspaceId,
-      idempotencyKey: params.idempotencyKey,
-      operation: "CREATE_ORDER",
-      responseStatus: 201,
-      responseBody: JSON.stringify(responseResult),
-      createdAt: new Date(),
-    });
-  }
-
-  // 11. Dispatch MCP Event: order.created
   dispatchMcpEvent(params.workspaceId, "order.created", {
     order_id: orderId,
     order_number: orderNumber,
@@ -307,7 +501,7 @@ export async function createOrder(params: CreateOrderParams) {
     customer_name: params.newCustomer?.name || "Customer",
     total_amount: totalAmountNum,
     status: "CONFIRMED",
-    payment_status: initialPaymentStatus,
+    payment_status: finalPaymentStatus,
     items_count: resolvedItems.length,
     url: `${getBaseUrl()}/orders#${orderId}`,
   });

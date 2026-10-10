@@ -837,31 +837,114 @@ export function createMcpServer(principal: McpAuthPrincipal) {
     }
   );
 
-  server.tool(
+  server.registerTool(
     "create_order",
-    "Create a new manual order, automatically reserve inventory, and calculate totals (High-impact write)",
     {
-      customerId: z.string().optional(),
-      newCustomerName: z.string().optional(),
-      newCustomerPhone: z.string().optional(),
-      shippingAddress: z.string().min(5),
-      source: z.string().default("WhatsApp"),
-      items: z.array(
-        z.object({
-          productId: z.string(),
-          quantity: z.coerce.number().int().positive(),
-          unitPrice: z.coerce.number().optional(),
-          discount: z.coerce.number().optional(),
-        })
-      ),
-      orderDiscount: z.coerce.number().optional().default(0),
-      shippingFee: z.coerce.number().optional().default(0),
-      paymentMethod: z.string().default("Cash on Delivery"),
-      paymentStatus: z.enum(["UNPAID", "PARTIALLY_PAID", "PAID"]).default("UNPAID"),
-      packingNotes: z.string().optional(),
-      notes: z.string().optional(),
-      idempotencyKey: z.string().optional(),
-      confirmationToken: z.string().optional(),
+      title: "Create Customer Order",
+      description:
+        "Create a verified customer order, reserve available catalog stock, and calculate order totals against the current inventory ledger.",
+      inputSchema: {
+        customerId: z
+          .string()
+          .optional()
+          .describe(
+            "Existing customer ID (e.g. cust_xxx). If provided, shippingAddress can be omitted to use customer's address on file."
+          ),
+        newCustomerName: z
+          .string()
+          .optional()
+          .describe("Customer full name if creating a new customer."),
+        newCustomerPhone: z
+          .string()
+          .optional()
+          .describe("Customer phone number if creating a new customer."),
+        newCustomerEmail: z
+          .string()
+          .optional()
+          .describe("Customer email address if creating a new customer."),
+        shippingAddress: z
+          .string()
+          .optional()
+          .describe(
+            "Shipping delivery address. Required for new customers; optional if customerId is provided and address is on file."
+          ),
+        source: z
+          .string()
+          .optional()
+          .default("WhatsApp")
+          .describe("Order intake channel (WhatsApp, Phone, Instagram, Website, etc.)."),
+        items: z
+          .array(
+            z.object({
+              productId: z.string().describe("Product ID from catalog (e.g. prd_xxx)."),
+              quantity: z.coerce.number().int().positive().describe("Quantity of items (positive integer)."),
+              unitPrice: z.coerce.number().positive().optional().describe("Expected unit price. Verified against catalog price."),
+              discount: z.coerce.number().min(0).optional().describe("Discount amount on this item line."),
+            })
+          )
+          .min(1)
+          .describe("List of items to order. Stock will be automatically reserved."),
+        orderDiscount: z
+          .coerce.number()
+          .min(0)
+          .optional()
+          .default(0)
+          .describe("Overall order discount."),
+        shippingFee: z
+          .coerce.number()
+          .min(0)
+          .optional()
+          .default(0)
+          .describe("Shipping delivery charge."),
+        paymentMethod: z
+          .string()
+          .optional()
+          .default("Cash on Delivery")
+          .describe("Payment channel: UPI, Cash on Delivery, Card, Net Banking, etc."),
+        paymentStatus: z
+          .enum(["UNPAID", "PARTIALLY_PAID", "PAID"])
+          .optional()
+          .default("UNPAID")
+          .describe("Payment status: UNPAID, PARTIALLY_PAID, or PAID."),
+        paymentReference: z
+          .string()
+          .optional()
+          .describe(
+            "Payment transaction reference (e.g. UPI transaction ID, bank UTR) required to mark order as verified PAID."
+          ),
+        paymentReportedByCustomer: z
+          .boolean()
+          .optional()
+          .describe(
+            "Set to true if customer reports they have paid (e.g. via UPI) but merchant has not yet independently verified the transaction."
+          ),
+        packingNotes: z
+          .string()
+          .optional()
+          .describe("Instructions for warehouse packing team."),
+        notes: z
+          .string()
+          .optional()
+          .describe("Internal order notes or customer requests."),
+        idempotencyKey: z
+          .string()
+          .optional()
+          .describe("Unique client-generated idempotency key to prevent duplicate orders on network retries."),
+        confirmed: z
+          .boolean()
+          .optional()
+          .default(true)
+          .describe("Explicit confirmation to place order and reserve inventory."),
+        confirmationToken: z
+          .string()
+          .optional()
+          .describe("Approval token from pending confirmations workflow if required."),
+      },
+      annotations: {
+        readOnlyHint: false,
+        destructiveHint: false,
+        openWorldHint: false,
+      },
     },
     async (args) => {
       requireScope("orders:create");
@@ -869,6 +952,7 @@ export function createMcpServer(principal: McpAuthPrincipal) {
         customerId,
         newCustomerName,
         newCustomerPhone,
+        newCustomerEmail,
         shippingAddress,
         source,
         items,
@@ -876,54 +960,102 @@ export function createMcpServer(principal: McpAuthPrincipal) {
         shippingFee,
         paymentMethod,
         paymentStatus,
+        paymentReference,
+        paymentReportedByCustomer,
         packingNotes,
         notes,
         idempotencyKey,
+        confirmed,
         confirmationToken,
       } = args;
 
-      // High-impact confirmation requirement
-      if (!confirmationToken) {
+      // Handle confirmation workflows
+      if (confirmationToken) {
+        await confirmationService.verifyAndConsumeConfirmation(workspaceId, confirmationToken, "create_order");
+      } else if (confirmed === false) {
         const conf = await confirmationService.createPendingConfirmation({
           workspaceId,
           clientId: principal.clientId,
           toolName: "create_order",
           parameters: args,
           riskLevel: "HIGH",
-          description: `Create order with ${items.length} item(s) reserving warehouse inventory. Delivery to: ${shippingAddress}`,
+          description: `Create order with ${items.length} item(s) reserving warehouse inventory. Delivery to: ${shippingAddress || "Customer address on file"}`,
         });
-        return { content: [{ type: "text", text: JSON.stringify(conf, null, 2) }] };
+        return {
+          content: [
+            {
+              type: "text",
+              text: `⚠️ Operator confirmation required to reserve stock and create order. Call create_order with confirmed: true or use confirmation token: ${conf.confirmationToken}`,
+            },
+          ],
+          structuredContent: {
+            code: "CONFIRMATION_REQUIRED",
+            confirmation: conf,
+          },
+        };
       }
-
-      await confirmationService.verifyAndConsumeConfirmation(workspaceId, confirmationToken, "create_order");
 
       const newCustomer = newCustomerName
         ? {
             name: newCustomerName,
             phone: newCustomerPhone || null,
-            shippingAddress,
+            email: newCustomerEmail || null,
+            shippingAddress: shippingAddress || "",
           }
         : null;
 
-      const order = await orderService.createOrder({
-        workspaceId,
-        customerId: customerId || null,
-        newCustomer,
-        shippingAddress,
-        source,
-        items,
-        orderDiscount,
-        shippingFee,
-        paymentMethod,
-        paymentStatus,
-        packingNotes,
-        notes,
-        idempotencyKey,
-        actor,
-        sourceType: "mcp",
-      });
+      try {
+        const order = await orderService.createOrder({
+          workspaceId,
+          customerId: customerId || null,
+          newCustomer,
+          shippingAddress: shippingAddress || null,
+          source,
+          items,
+          orderDiscount,
+          shippingFee,
+          paymentMethod,
+          paymentStatus,
+          paymentReference,
+          paymentReportedByCustomer,
+          packingNotes,
+          notes,
+          idempotencyKey,
+          confirmed,
+          actor,
+          sourceType: "mcp",
+        });
 
-      return { content: [{ type: "text", text: JSON.stringify(order, null, 2) }] };
+        return {
+          content: [
+            {
+              type: "text",
+              text: `✓ Order ${order.orderNumber} successfully created (Total: ₹${order.totalAmount}, Status: ${order.status}, Payment: ${order.paymentStatus}). Inventory reserved for ${order.items.length} item(s).`,
+            },
+          ],
+          structuredContent: {
+            success: true,
+            order,
+          },
+        };
+      } catch (err: any) {
+        const errorCode = err instanceof orderService.OrderServiceError ? err.code : "INTERNAL_ERROR";
+        return {
+          isError: true,
+          content: [
+            {
+              type: "text",
+              text: `⚠️ Order creation failed [${errorCode}]: ${err.message}`,
+            },
+          ],
+          structuredContent: {
+            success: false,
+            code: errorCode,
+            message: err.message,
+            details: err instanceof orderService.OrderServiceError ? err.details : undefined,
+          },
+        };
+      }
     }
   );
 

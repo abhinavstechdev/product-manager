@@ -127,12 +127,13 @@ export async function reserveStockForOrder(params: {
   orderNumber: string;
   items: Array<{ productId: string; quantity: number }>;
   actor: StockActor;
+  tx?: any;
 }) {
-  const db = await getDb();
+  const client = params.tx || (await getDb());
 
   // Validate all items have sufficient available stock first
   for (const item of params.items) {
-    const [p] = await (db as any)
+    const [p] = await (client as any)
       .select()
       .from(products)
       .where(and(eq(products.id, item.productId), eq(products.workspaceId, params.workspaceId)))
@@ -148,9 +149,9 @@ export async function reserveStockForOrder(params: {
     }
   }
 
-  // Atomically increment reservedStock and log ledger
+  // Atomically increment reservedStock with concurrency check and log ledger
   for (const item of params.items) {
-    const [p] = await (db as any)
+    const [p] = await (client as any)
       .select()
       .from(products)
       .where(eq(products.id, item.productId))
@@ -159,16 +160,26 @@ export async function reserveStockForOrder(params: {
     const prevReserved = p.reservedStock;
     const newReserved = prevReserved + item.quantity;
 
-    await (db as any)
+    const updateRes = await (client as any)
       .update(products)
       .set({
-        reservedStock: newReserved,
+        reservedStock: sql`${products.reservedStock} + ${item.quantity}`,
         updatedAt: new Date(),
       })
-      .where(eq(products.id, p.id));
+      .where(
+        and(
+          eq(products.id, p.id),
+          sql`(${products.physicalStock} - ${products.reservedStock}) >= ${item.quantity}`
+        )
+      )
+      .returning();
+
+    if (!updateRes || updateRes.length === 0) {
+      throw new Error(`Insufficient available stock for SKU ${p.sku} (${p.name}). Concurrent reservation occurred.`);
+    }
 
     const txId = `tx_res_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
-    await (db as any).insert(inventoryTransactions).values({
+    await (client as any).insert(inventoryTransactions).values({
       id: txId,
       workspaceId: params.workspaceId,
       productId: p.id,
