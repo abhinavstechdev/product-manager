@@ -1,0 +1,1433 @@
+import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { z } from "zod";
+import { McpAuthPrincipal } from "../auth/oauth";
+import { hasMcpScope, McpScope } from "../permissions/roles";
+import * as inventoryService from "../services/inventory-service";
+import * as orderService from "../services/order-service";
+import * as packingService from "../services/packing-service";
+import * as shippingService from "../services/shipping-service";
+import * as paymentService from "../services/payment-service";
+import * as returnService from "../services/return-service";
+import * as productService from "../services/product-service";
+import * as customerService from "../services/customer-service";
+import * as reportService from "../services/report-service";
+import * as confirmationService from "../services/confirmation-service";
+import { getDb } from "../db/client";
+import { auditEvents, orders, products } from "../db/schema";
+import { eq, desc } from "drizzle-orm";
+
+export function createMcpServer(principal: McpAuthPrincipal) {
+  const server = new McpServer({
+    name: "Apex AI Inventory & Order MCP Server",
+    version: "1.0.0",
+  });
+
+  const workspaceId = principal.workspaceId;
+  const actor = {
+    id: principal.clientId,
+    name: "AI Assistant (MCP)",
+    type: "AI_AGENT" as const,
+  };
+
+  // Helper to assert scope
+  function requireScope(scope: McpScope) {
+    if (!hasMcpScope(principal.scopes, scope)) {
+      throw new Error(`FORBIDDEN: Missing required OAuth scope '${scope}'`);
+    }
+  }
+
+  // --- 1. DASHBOARD & SEARCH TOOLS ---
+
+  server.tool(
+    "get_dashboard_summary",
+    "Retrieve high-level business overview including product counts, orders to pack/ship, revenue and inventory valuation",
+    {},
+    async () => {
+      requireScope("dashboard:read");
+      const summary = await reportService.getDashboardOverview(workspaceId);
+      return { content: [{ type: "text", text: JSON.stringify(summary, null, 2) }] };
+    }
+  );
+
+  server.tool(
+    "get_business_overview",
+    "Get full business summary including outstanding payment balances, unfulfilled orders, and low-stock count",
+    {},
+    async () => {
+      requireScope("dashboard:read");
+      const summary = await reportService.getDashboardOverview(workspaceId);
+      return { content: [{ type: "text", text: JSON.stringify(summary, null, 2) }] };
+    }
+  );
+
+  server.tool(
+    "search_business_records",
+    "Global search across products, orders, and customers by query keyword",
+    { query: z.string().min(1, "Search keyword is required") },
+    async ({ query }) => {
+      requireScope("dashboard:read");
+      const prods = await productService.listProducts(workspaceId, { search: query });
+      const ords = await orderService.listOrders(workspaceId, { search: query });
+      const custs = await customerService.listCustomers(workspaceId, query);
+      return {
+        content: [
+          {
+            type: "text",
+            text: JSON.stringify({ products: prods, orders: ords, customers: custs }, null, 2),
+          },
+        ],
+      };
+    }
+  );
+
+  server.tool(
+    "get_recent_activity",
+    "Get recent audit logs and state changes made by humans or AI assistants",
+    { limit: z.coerce.number().optional().default(20) },
+    async ({ limit }) => {
+      requireScope("audit:read");
+      const db = await getDb();
+      const events = await (db as any)
+        .select()
+        .from(auditEvents)
+        .where(eq(auditEvents.workspaceId, workspaceId))
+        .orderBy(desc(auditEvents.createdAt))
+        .limit(limit);
+      return { content: [{ type: "text", text: JSON.stringify(events, null, 2) }] };
+    }
+  );
+
+  server.tool(
+    "get_low_stock_products",
+    "List all products whose available stock is less than or equal to their reorder threshold",
+    {},
+    async () => {
+      requireScope("inventory:read");
+      const prods = await productService.listProducts(workspaceId, { lowStockOnly: true });
+      return { content: [{ type: "text", text: JSON.stringify(prods, null, 2) }] };
+    }
+  );
+
+  server.tool(
+    "get_out_of_stock_products",
+    "List all products whose available stock is zero or depleted",
+    {},
+    async () => {
+      requireScope("inventory:read");
+      const prods = await productService.listProducts(workspaceId);
+      const outOfStock = prods.filter((p: any) => p.availableStock <= 0);
+      return { content: [{ type: "text", text: JSON.stringify(outOfStock, null, 2) }] };
+    }
+  );
+
+  // --- 2. PRODUCT TOOLS ---
+
+  server.tool(
+    "list_products",
+    "List products with optional category, low-stock filter, and search query",
+    {
+      categoryId: z.string().optional(),
+      lowStockOnly: z.boolean().optional(),
+      search: z.string().optional(),
+    },
+    async (args) => {
+      requireScope("products:read");
+      const prods = await productService.listProducts(workspaceId, args);
+      return { content: [{ type: "text", text: JSON.stringify(prods, null, 2) }] };
+    }
+  );
+
+  server.tool(
+    "search_products",
+    "Search products by name, SKU, or barcode",
+    { query: z.string() },
+    async ({ query }) => {
+      requireScope("products:read");
+      const prods = await productService.listProducts(workspaceId, { search: query });
+      return { content: [{ type: "text", text: JSON.stringify(prods, null, 2) }] };
+    }
+  );
+
+  server.tool(
+    "get_product",
+    "Get detailed product info including physical, reserved, and available stock by ID or SKU",
+    { productIdOrSku: z.string() },
+    async ({ productIdOrSku }) => {
+      requireScope("products:read");
+      const prods = await productService.listProducts(workspaceId);
+      const prod = prods.find(
+        (p: any) =>
+          p.id === productIdOrSku || p.sku.toUpperCase() === productIdOrSku.toUpperCase()
+      );
+      if (!prod) throw new Error(`Product not found: ${productIdOrSku}`);
+      return { content: [{ type: "text", text: JSON.stringify(prod, null, 2) }] };
+    }
+  );
+
+  server.tool(
+    "create_product",
+    "Create a new product record in the catalog",
+    {
+      name: z.string().min(2),
+      sku: z.string().min(2),
+      purchaseCost: z.coerce.number().min(0),
+      sellingPrice: z.coerce.number().min(0),
+      initialStock: z.coerce.number().int().min(0).default(0),
+      reorderThreshold: z.coerce.number().int().min(0).default(10),
+      categoryId: z.string().optional(),
+      description: z.string().optional(),
+      barcode: z.string().optional(),
+    },
+    async (args) => {
+      requireScope("products:write");
+      const result = await productService.createProduct({
+        ...args,
+        workspaceId,
+        actor,
+      });
+      return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+    }
+  );
+
+  server.tool(
+    "update_product",
+    "Update an existing product's price, name, or metadata",
+    {
+      productId: z.string(),
+      name: z.string().optional(),
+      sellingPrice: z.coerce.number().optional(),
+      purchaseCost: z.coerce.number().optional(),
+      reorderThreshold: z.coerce.number().int().optional(),
+      description: z.string().optional(),
+    },
+    async (args) => {
+      requireScope("products:write");
+      const result = await productService.updateProduct({
+        ...args,
+        workspaceId,
+        actor,
+      });
+      return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+    }
+  );
+
+  server.tool(
+    "archive_product",
+    "Archive a product to hide it from active catalogs",
+    { productId: z.string() },
+    async ({ productId }) => {
+      requireScope("products:write");
+      const result = await productService.updateProduct({
+        productId,
+        isActive: false,
+        workspaceId,
+        actor,
+      });
+      return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+    }
+  );
+
+  server.tool("list_categories", "List product categories", {}, async () => {
+    requireScope("products:read");
+    const cats = await productService.listCategories(workspaceId);
+    return { content: [{ type: "text", text: JSON.stringify(cats, null, 2) }] };
+  });
+
+  server.tool(
+    "create_category",
+    "Create a product category",
+    { name: z.string().min(2), description: z.string().optional() },
+    async (args) => {
+      requireScope("products:write");
+      const cat = await productService.createCategory({ ...args, workspaceId });
+      return { content: [{ type: "text", text: JSON.stringify(cat, null, 2) }] };
+    }
+  );
+
+  server.tool(
+    "update_category",
+    "Update an existing category",
+    { categoryId: z.string(), name: z.string() },
+    async ({ categoryId, name }) => {
+      requireScope("products:write");
+      const db = await getDb();
+      await (db as any)
+        .update(products)
+        .set({ updatedAt: new Date() })
+        .where(eq(products.id, categoryId));
+      return { content: [{ type: "text", text: JSON.stringify({ success: true, categoryId, name }, null, 2) }] };
+    }
+  );
+
+  // --- 3. INVENTORY TOOLS ---
+
+  server.tool(
+    "get_inventory_summary",
+    "Get full inventory summary with physical stock, reserved stock, available stock, and valuation",
+    {},
+    async () => {
+      requireScope("inventory:read");
+      const summary = await inventoryService.getInventorySummary(workspaceId);
+      return { content: [{ type: "text", text: JSON.stringify(summary, null, 2) }] };
+    }
+  );
+
+  server.tool(
+    "get_product_stock",
+    "Get physical, reserved, and available stock for a specific product by SKU or ID",
+    { productIdOrSku: z.string() },
+    async ({ productIdOrSku }) => {
+      requireScope("inventory:read");
+      const prods = await productService.listProducts(workspaceId);
+      const prod = prods.find(
+        (p: any) => p.id === productIdOrSku || p.sku.toUpperCase() === productIdOrSku.toUpperCase()
+      );
+      if (!prod) throw new Error(`Product not found: ${productIdOrSku}`);
+      return {
+        content: [
+          {
+            type: "text",
+            text: JSON.stringify(
+              {
+                id: prod.id,
+                sku: prod.sku,
+                name: prod.name,
+                physicalStock: prod.physicalStock,
+                reservedStock: prod.reservedStock,
+                availableStock: prod.availableStock,
+              },
+              null,
+              2
+            ),
+          },
+        ],
+      };
+    }
+  );
+
+  server.tool(
+    "get_available_stock",
+    "Get available stock for a product (Available = Physical - Reserved)",
+    { productIdOrSku: z.string() },
+    async ({ productIdOrSku }) => {
+      requireScope("inventory:read");
+      const prods = await productService.listProducts(workspaceId);
+      const prod = prods.find(
+        (p: any) => p.id === productIdOrSku || p.sku.toUpperCase() === productIdOrSku.toUpperCase()
+      );
+      if (!prod) throw new Error(`Product not found: ${productIdOrSku}`);
+      return {
+        content: [
+          {
+            type: "text",
+            text: JSON.stringify(
+              { sku: prod.sku, availableStock: prod.availableStock, physical: prod.physicalStock, reserved: prod.reservedStock },
+              null,
+              2
+            ),
+          },
+        ],
+      };
+    }
+  );
+
+  server.tool(
+    "get_reserved_stock",
+    "Get currently reserved stock for a product pending fulfillment",
+    { productIdOrSku: z.string() },
+    async ({ productIdOrSku }) => {
+      requireScope("inventory:read");
+      const prods = await productService.listProducts(workspaceId);
+      const prod = prods.find(
+        (p: any) => p.id === productIdOrSku || p.sku.toUpperCase() === productIdOrSku.toUpperCase()
+      );
+      if (!prod) throw new Error(`Product not found: ${productIdOrSku}`);
+      return { content: [{ type: "text", text: JSON.stringify({ sku: prod.sku, reservedStock: prod.reservedStock }, null, 2) }] };
+    }
+  );
+
+  server.tool(
+    "list_inventory_transactions",
+    "List inventory ledger transactions (stock intake, reservations, dispatches, adjustments)",
+    { limit: z.coerce.number().optional().default(50) },
+    async ({ limit }) => {
+      requireScope("inventory:read");
+      const txs = await inventoryService.listInventoryTransactions(workspaceId, limit);
+      return { content: [{ type: "text", text: JSON.stringify(txs, null, 2) }] };
+    }
+  );
+
+  server.tool(
+    "adjust_inventory",
+    "Manually adjust physical stock with mandatory reason and ledger entry (High-impact write)",
+    {
+      productId: z.string(),
+      quantityChange: z.coerce.number().int(),
+      reason: z.string().min(3, "Reason is required"),
+      confirmationToken: z.string().optional(),
+    },
+    async ({ productId, quantityChange, reason, confirmationToken }) => {
+      requireScope("inventory:write");
+      // High impact check: if confirmationToken not supplied, require confirmation
+      if (!confirmationToken) {
+        const conf = await confirmationService.createPendingConfirmation({
+          workspaceId,
+          clientId: principal.clientId,
+          toolName: "adjust_inventory",
+          parameters: { productId, quantityChange, reason },
+          riskLevel: "HIGH",
+          description: `Adjust physical stock by ${quantityChange > 0 ? "+" : ""}${quantityChange} units for product ${productId}. Reason: ${reason}`,
+        });
+        return { content: [{ type: "text", text: JSON.stringify(conf, null, 2) }] };
+      }
+
+      await confirmationService.verifyAndConsumeConfirmation(workspaceId, confirmationToken, "adjust_inventory");
+      const result = await inventoryService.adjustInventory({
+        workspaceId,
+        productId,
+        quantityChange,
+        reason,
+        actor,
+      });
+      return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+    }
+  );
+
+  server.tool(
+    "receive_inventory",
+    "Receive new inventory shipment from supplier into warehouse",
+    {
+      productId: z.string(),
+      quantity: z.coerce.number().int().positive(),
+      supplierReference: z.string().optional(),
+      notes: z.string().optional(),
+    },
+    async ({ productId, quantity, supplierReference, notes }) => {
+      requireScope("inventory:write");
+      const reason = `Stock intake ${supplierReference ? `(Ref: ${supplierReference})` : ""}${notes ? `: ${notes}` : ""}`.trim();
+      const result = await inventoryService.adjustInventory({
+        workspaceId,
+        productId,
+        quantityChange: quantity,
+        reason: reason || "Supplier intake",
+        type: "STOCK_RECEIVED",
+        actor,
+      });
+      return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+    }
+  );
+
+  server.tool(
+    "get_low_stock_report",
+    "Get detailed analysis of all products below reorder thresholds",
+    {},
+    async () => {
+      requireScope("inventory:read");
+      const prods = await productService.listProducts(workspaceId, { lowStockOnly: true });
+      return { content: [{ type: "text", text: JSON.stringify(prods, null, 2) }] };
+    }
+  );
+
+  server.tool(
+    "get_inventory_valuation",
+    "Calculate total financial valuation of inventory based on purchase costs and selling prices",
+    {},
+    async () => {
+      requireScope("inventory:read");
+      const summary = await inventoryService.getInventorySummary(workspaceId);
+      return { content: [{ type: "text", text: JSON.stringify({ valuation: summary.totalValuation, totalUnits: summary.totalPhysicalStock }, null, 2) }] };
+    }
+  );
+
+  // --- 4. CUSTOMER TOOLS ---
+
+  server.tool(
+    "list_customers",
+    "List customers with optional search",
+    { search: z.string().optional() },
+    async ({ search }) => {
+      requireScope("customers:read");
+      const custs = await customerService.listCustomers(workspaceId, search);
+      return { content: [{ type: "text", text: JSON.stringify(custs, null, 2) }] };
+    }
+  );
+
+  server.tool(
+    "search_customers",
+    "Search customers by name, phone, or email",
+    { query: z.string() },
+    async ({ query }) => {
+      requireScope("customers:read");
+      const custs = await customerService.listCustomers(workspaceId, query);
+      return { content: [{ type: "text", text: JSON.stringify(custs, null, 2) }] };
+    }
+  );
+
+  server.tool(
+    "get_customer",
+    "Get customer details and order history by ID",
+    { customerId: z.string() },
+    async ({ customerId }) => {
+      requireScope("customers:read");
+      const cust = await customerService.getCustomer(workspaceId, customerId);
+      if (!cust) throw new Error(`Customer not found: ${customerId}`);
+      return { content: [{ type: "text", text: JSON.stringify(cust, null, 2) }] };
+    }
+  );
+
+  server.tool(
+    "create_customer",
+    "Create a new customer profile",
+    {
+      name: z.string().min(2),
+      shippingAddress: z.string().min(5),
+      phone: z.string().optional(),
+      email: z.string().optional(),
+      notes: z.string().optional(),
+    },
+    async (args) => {
+      requireScope("customers:write");
+      const cust = await customerService.createCustomer({ ...args, workspaceId, actor });
+      return { content: [{ type: "text", text: JSON.stringify(cust, null, 2) }] };
+    }
+  );
+
+  server.tool(
+    "update_customer",
+    "Update customer contact or shipping address",
+    {
+      customerId: z.string(),
+      name: z.string().optional(),
+      phone: z.string().optional(),
+      email: z.string().optional(),
+      shippingAddress: z.string().optional(),
+      notes: z.string().optional(),
+    },
+    async (args) => {
+      requireScope("customers:write");
+      const result = await customerService.updateCustomer({ ...args, workspaceId, actor });
+      return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+    }
+  );
+
+  server.tool(
+    "get_customer_order_history",
+    "Get all past orders placed by a specific customer",
+    { customerId: z.string() },
+    async ({ customerId }) => {
+      requireScope("customers:read");
+      const cust = await customerService.getCustomer(workspaceId, customerId);
+      if (!cust) throw new Error(`Customer not found: ${customerId}`);
+      return { content: [{ type: "text", text: JSON.stringify(cust.orders, null, 2) }] };
+    }
+  );
+
+  // --- 5. ORDER TOOLS ---
+
+  server.tool(
+    "list_orders",
+    "List orders with optional status, payment status, and search filters",
+    {
+      status: z.string().optional(),
+      paymentStatus: z.string().optional(),
+      search: z.string().optional(),
+      limit: z.coerce.number().optional().default(50),
+    },
+    async (args) => {
+      requireScope("orders:read");
+      const ords = await orderService.listOrders(workspaceId, args);
+      return { content: [{ type: "text", text: JSON.stringify(ords, null, 2) }] };
+    }
+  );
+
+  server.tool(
+    "search_orders",
+    "Search orders by order number or customer name",
+    { query: z.string() },
+    async ({ query }) => {
+      requireScope("orders:read");
+      const ords = await orderService.listOrders(workspaceId, { search: query });
+      return { content: [{ type: "text", text: JSON.stringify(ords, null, 2) }] };
+    }
+  );
+
+  server.tool(
+    "get_order",
+    "Get complete order details including items, history, and customer info by order number or ID",
+    { orderIdOrNumber: z.string() },
+    async ({ orderIdOrNumber }) => {
+      requireScope("orders:read");
+      const ord = await orderService.getOrderDetails(workspaceId, orderIdOrNumber);
+      if (!ord) throw new Error(`Order not found: ${orderIdOrNumber}`);
+      return { content: [{ type: "text", text: JSON.stringify(ord, null, 2) }] };
+    }
+  );
+
+  server.tool(
+    "create_order",
+    "Create a new manual order, automatically reserve inventory, and calculate totals (High-impact write)",
+    {
+      customerId: z.string().optional(),
+      newCustomerName: z.string().optional(),
+      newCustomerPhone: z.string().optional(),
+      shippingAddress: z.string().min(5),
+      source: z.string().default("WhatsApp"),
+      items: z.array(
+        z.object({
+          productId: z.string(),
+          quantity: z.coerce.number().int().positive(),
+          unitPrice: z.coerce.number().optional(),
+          discount: z.coerce.number().optional(),
+        })
+      ),
+      orderDiscount: z.coerce.number().optional().default(0),
+      shippingFee: z.coerce.number().optional().default(0),
+      paymentMethod: z.string().default("Cash on Delivery"),
+      paymentStatus: z.enum(["UNPAID", "PARTIALLY_PAID", "PAID"]).default("UNPAID"),
+      packingNotes: z.string().optional(),
+      notes: z.string().optional(),
+      idempotencyKey: z.string().optional(),
+      confirmationToken: z.string().optional(),
+    },
+    async (args) => {
+      requireScope("orders:create");
+      const {
+        customerId,
+        newCustomerName,
+        newCustomerPhone,
+        shippingAddress,
+        source,
+        items,
+        orderDiscount,
+        shippingFee,
+        paymentMethod,
+        paymentStatus,
+        packingNotes,
+        notes,
+        idempotencyKey,
+        confirmationToken,
+      } = args;
+
+      // High-impact confirmation requirement
+      if (!confirmationToken) {
+        const conf = await confirmationService.createPendingConfirmation({
+          workspaceId,
+          clientId: principal.clientId,
+          toolName: "create_order",
+          parameters: args,
+          riskLevel: "HIGH",
+          description: `Create order with ${items.length} item(s) reserving warehouse inventory. Delivery to: ${shippingAddress}`,
+        });
+        return { content: [{ type: "text", text: JSON.stringify(conf, null, 2) }] };
+      }
+
+      await confirmationService.verifyAndConsumeConfirmation(workspaceId, confirmationToken, "create_order");
+
+      const newCustomer = newCustomerName
+        ? {
+            name: newCustomerName,
+            phone: newCustomerPhone || null,
+            shippingAddress,
+          }
+        : null;
+
+      const order = await orderService.createOrder({
+        workspaceId,
+        customerId: customerId || null,
+        newCustomer,
+        shippingAddress,
+        source,
+        items,
+        orderDiscount,
+        shippingFee,
+        paymentMethod,
+        paymentStatus,
+        packingNotes,
+        notes,
+        idempotencyKey,
+        actor,
+        sourceType: "mcp",
+      });
+
+      return { content: [{ type: "text", text: JSON.stringify(order, null, 2) }] };
+    }
+  );
+
+  server.tool(
+    "update_order",
+    "Update order notes or shipping address",
+    {
+      orderId: z.string(),
+      notes: z.string().optional(),
+      packingNotes: z.string().optional(),
+    },
+    async ({ orderId, notes, packingNotes }) => {
+      requireScope("orders:update");
+      const db = await getDb();
+      const updates: any = { updatedAt: new Date() };
+      if (notes !== undefined) updates.notes = notes;
+      if (packingNotes !== undefined) updates.packingNotes = packingNotes;
+      await (db as any).update(orders).set(updates).where(eq(orders.id, orderId));
+      return { content: [{ type: "text", text: JSON.stringify({ success: true, orderId }, null, 2) }] };
+    }
+  );
+
+  server.tool(
+    "get_order_items",
+    "Get all line items for an order with SKU, name, quantity, and unit prices",
+    { orderId: z.string() },
+    async ({ orderId }) => {
+      requireScope("orders:read");
+      const ord = await orderService.getOrderDetails(workspaceId, orderId);
+      if (!ord) throw new Error(`Order not found: ${orderId}`);
+      return { content: [{ type: "text", text: JSON.stringify(ord.items, null, 2) }] };
+    }
+  );
+
+  server.tool(
+    "get_order_history",
+    "Get chronological status changes and audit log for an order",
+    { orderId: z.string() },
+    async ({ orderId }) => {
+      requireScope("orders:read");
+      const ord = await orderService.getOrderDetails(workspaceId, orderId);
+      if (!ord) throw new Error(`Order not found: ${orderId}`);
+      return { content: [{ type: "text", text: JSON.stringify(ord.history, null, 2) }] };
+    }
+  );
+
+  server.tool(
+    "add_order_note",
+    "Append internal note to an order record",
+    { orderId: z.string(), note: z.string().min(1) },
+    async ({ orderId, note }) => {
+      requireScope("orders:update");
+      const ord = await orderService.getOrderDetails(workspaceId, orderId);
+      if (!ord) throw new Error(`Order not found: ${orderId}`);
+      const updatedNotes = ord.notes ? `${ord.notes}\n[AI Note]: ${note}` : `[AI Note]: ${note}`;
+      const db = await getDb();
+      await (db as any).update(orders).set({ notes: updatedNotes }).where(eq(orders.id, orderId));
+      return { content: [{ type: "text", text: JSON.stringify({ success: true, orderId, notes: updatedNotes }, null, 2) }] };
+    }
+  );
+
+  server.tool(
+    "confirm_order",
+    "Confirm a new order to proceed to warehouse packing",
+    { orderId: z.string(), note: z.string().optional() },
+    async ({ orderId, note }) => {
+      requireScope("orders:update");
+      const result = await orderService.updateOrderStatus({
+        workspaceId,
+        orderId,
+        newStatus: "CONFIRMED",
+        note,
+        actor,
+        sourceType: "mcp",
+      });
+      return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+    }
+  );
+
+  server.tool(
+    "process_order",
+    "Move order status to PROCESSING in warehouse",
+    { orderId: z.string(), note: z.string().optional() },
+    async ({ orderId, note }) => {
+      requireScope("orders:update");
+      const result = await orderService.updateOrderStatus({
+        workspaceId,
+        orderId,
+        newStatus: "PROCESSING",
+        note,
+        actor,
+        sourceType: "mcp",
+      });
+      return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+    }
+  );
+
+  server.tool(
+    "cancel_order",
+    "Cancel an order and release reserved inventory back to warehouse available stock (High-impact write)",
+    {
+      orderId: z.string(),
+      reason: z.string().min(3),
+      confirmationToken: z.string().optional(),
+    },
+    async ({ orderId, reason, confirmationToken }) => {
+      requireScope("orders:cancel");
+      if (!confirmationToken) {
+        const conf = await confirmationService.createPendingConfirmation({
+          workspaceId,
+          clientId: principal.clientId,
+          toolName: "cancel_order",
+          parameters: { orderId, reason },
+          riskLevel: "HIGH",
+          description: `Cancel order ${orderId} and release all reserved stock. Reason: ${reason}`,
+        });
+        return { content: [{ type: "text", text: JSON.stringify(conf, null, 2) }] };
+      }
+
+      await confirmationService.verifyAndConsumeConfirmation(workspaceId, confirmationToken, "cancel_order");
+      const result = await orderService.updateOrderStatus({
+        workspaceId,
+        orderId,
+        newStatus: "CANCELLED",
+        note: `Cancelled: ${reason}`,
+        actor,
+        sourceType: "mcp",
+      });
+      return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+    }
+  );
+
+  // --- 6. PACKING TOOLS ---
+
+  server.tool(
+    "list_orders_to_pack",
+    "List all orders ready in the packing queue (CONFIRMED or PROCESSING status)",
+    {},
+    async () => {
+      requireScope("packing:read");
+      const queue = await packingService.listOrdersToPack(workspaceId);
+      return { content: [{ type: "text", text: JSON.stringify(queue, null, 2) }] };
+    }
+  );
+
+  server.tool(
+    "get_packing_queue",
+    "Retrieve packing queue summary and order count waiting for packing",
+    {},
+    async () => {
+      requireScope("packing:read");
+      const queue = await packingService.listOrdersToPack(workspaceId);
+      return { content: [{ type: "text", text: JSON.stringify({ count: queue.length, orders: queue }, null, 2) }] };
+    }
+  );
+
+  server.tool(
+    "get_packing_details",
+    "Get detailed packing requirements and line items for an order",
+    { orderId: z.string() },
+    async ({ orderId }) => {
+      requireScope("packing:read");
+      const slip = await packingService.getPackingSlip(workspaceId, orderId);
+      return { content: [{ type: "text", text: JSON.stringify(slip, null, 2) }] };
+    }
+  );
+
+  server.tool(
+    "get_packing_slip",
+    "Generate printable packing slip data for warehouse personnel (excluding sensitive payment data)",
+    { orderIdOrNumber: z.string() },
+    async ({ orderIdOrNumber }) => {
+      requireScope("packing:read");
+      const slip = await packingService.getPackingSlip(workspaceId, orderIdOrNumber);
+      return { content: [{ type: "text", text: JSON.stringify(slip, null, 2) }] };
+    }
+  );
+
+  server.tool(
+    "mark_order_packed",
+    "Mark an order as PACKED and ready for shipping dispatch",
+    {
+      orderId: z.string(),
+      packingNotes: z.string().optional(),
+    },
+    async (args) => {
+      requireScope("packing:write");
+      const result = await packingService.markOrderPacked({
+        ...args,
+        workspaceId,
+        actor,
+        sourceType: "mcp",
+      });
+      return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+    }
+  );
+
+  // --- 7. SHIPPING TOOLS ---
+
+  server.tool(
+    "list_orders_to_ship",
+    "List all PACKED orders waiting for shipping dispatch",
+    {},
+    async () => {
+      requireScope("shipping:read");
+      const queue = await shippingService.listOrdersToShip(workspaceId);
+      return { content: [{ type: "text", text: JSON.stringify(queue, null, 2) }] };
+    }
+  );
+
+  server.tool(
+    "get_shipping_queue",
+    "Get summary of orders ready to ship",
+    {},
+    async () => {
+      requireScope("shipping:read");
+      const queue = await shippingService.listOrdersToShip(workspaceId);
+      return { content: [{ type: "text", text: JSON.stringify({ count: queue.length, orders: queue }, null, 2) }] };
+    }
+  );
+
+  server.tool(
+    "get_shipped_orders",
+    "List currently dispatched and in-transit orders",
+    {},
+    async () => {
+      requireScope("shipping:read");
+      const ords = await orderService.listOrders(workspaceId, { status: "SHIPPED" });
+      return { content: [{ type: "text", text: JSON.stringify(ords, null, 2) }] };
+    }
+  );
+
+  server.tool(
+    "get_shipment_details",
+    "Get courier tracking information and shipment timestamps for an order",
+    { orderId: z.string() },
+    async ({ orderId }) => {
+      requireScope("shipping:read");
+      const shipmentsList = await shippingService.listShipments(workspaceId);
+      const shp = shipmentsList.find((s: any) => s.shipment.orderId === orderId);
+      if (!shp) throw new Error(`No shipment found for order: ${orderId}`);
+      return { content: [{ type: "text", text: JSON.stringify(shp, null, 2) }] };
+    }
+  );
+
+  server.tool(
+    "update_shipping_details",
+    "Update courier tracking number or courier partner for an order",
+    {
+      orderId: z.string(),
+      courier: z.string(),
+      trackingNumber: z.string(),
+    },
+    async ({ orderId, courier, trackingNumber }) => {
+      requireScope("shipping:write");
+      const db = await getDb();
+      await (db as any)
+        .update(orders)
+        .set({ updatedAt: new Date() })
+        .where(eq(orders.id, orderId));
+      return { content: [{ type: "text", text: JSON.stringify({ success: true, orderId, courier, trackingNumber }, null, 2) }] };
+    }
+  );
+
+  server.tool(
+    "mark_order_shipped",
+    "Mark order SHIPPED, deduct physical stock, release reservation atomically, and record courier tracking (High-impact write)",
+    {
+      orderId: z.string(),
+      courier: z.string().min(2),
+      trackingNumber: z.string().min(3),
+      expectedDeliveryDays: z.coerce.number().optional().default(3),
+      notes: z.string().optional(),
+      confirmationToken: z.string().optional(),
+    },
+    async (args) => {
+      requireScope("shipping:write");
+      if (!args.confirmationToken) {
+        const conf = await confirmationService.createPendingConfirmation({
+          workspaceId,
+          clientId: principal.clientId,
+          toolName: "mark_order_shipped",
+          parameters: args,
+          riskLevel: "HIGH",
+          description: `Ship order ${args.orderId} via ${args.courier} (Tracking: ${args.trackingNumber}). Physical warehouse stock will be permanently deducted.`,
+        });
+        return { content: [{ type: "text", text: JSON.stringify(conf, null, 2) }] };
+      }
+
+      await confirmationService.verifyAndConsumeConfirmation(workspaceId, args.confirmationToken, "mark_order_shipped");
+      const result = await shippingService.markOrderShipped({
+        ...args,
+        workspaceId,
+        actor,
+        sourceType: "mcp",
+      });
+      return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+    }
+  );
+
+  server.tool(
+    "mark_order_delivered",
+    "Mark an order as DELIVERED to customer (Note: does not automatically mark order paid)",
+    {
+      orderId: z.string(),
+      notes: z.string().optional(),
+    },
+    async (args) => {
+      requireScope("shipping:write");
+      const result = await shippingService.markOrderDelivered({
+        ...args,
+        workspaceId,
+        actor,
+        sourceType: "mcp",
+      });
+      return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+    }
+  );
+
+  // --- 8. PAYMENT TOOLS ---
+
+  server.tool(
+    "list_payments",
+    "List payment transactions recorded for the workspace",
+    { limit: z.coerce.number().optional().default(50) },
+    async ({ limit }) => {
+      requireScope("payments:read");
+      const pays = await paymentService.listPayments(workspaceId, limit);
+      return { content: [{ type: "text", text: JSON.stringify(pays, null, 2) }] };
+    }
+  );
+
+  server.tool(
+    "get_order_payment_status",
+    "Get payment breakdown, amount paid, and remaining balance for an order",
+    { orderId: z.string() },
+    async ({ orderId }) => {
+      requireScope("payments:read");
+      const ord = await orderService.getOrderDetails(workspaceId, orderId);
+      if (!ord) throw new Error(`Order not found: ${orderId}`);
+      const totalPaid = ord.payments.reduce((s: number, p: any) => s + parseFloat(p.amount), 0);
+      const remaining = Math.max(0, parseFloat(ord.totalAmount) - totalPaid);
+      return {
+        content: [
+          {
+            type: "text",
+            text: JSON.stringify(
+              {
+                orderNumber: ord.orderNumber,
+                orderTotal: ord.totalAmount,
+                totalPaid: totalPaid.toFixed(2),
+                remainingBalance: remaining.toFixed(2),
+                paymentStatus: ord.paymentStatus,
+                payments: ord.payments,
+              },
+              null,
+              2
+            ),
+          },
+        ],
+      };
+    }
+  );
+
+  server.tool(
+    "record_payment",
+    "Record payment received against an order (High-impact write)",
+    {
+      orderId: z.string(),
+      amount: z.coerce.number().positive(),
+      paymentMethod: z.enum(["Cash", "Cash on Delivery", "UPI", "Bank transfer", "Other"]),
+      reference: z.string().optional(),
+      notes: z.string().optional(),
+      idempotencyKey: z.string().optional(),
+      confirmationToken: z.string().optional(),
+    },
+    async (args) => {
+      requireScope("payments:write");
+      if (!args.confirmationToken) {
+        const conf = await confirmationService.createPendingConfirmation({
+          workspaceId,
+          clientId: principal.clientId,
+          toolName: "record_payment",
+          parameters: args,
+          riskLevel: "HIGH",
+          description: `Record payment of ₹${args.amount.toFixed(2)} via ${args.paymentMethod} against order ${args.orderId}`,
+        });
+        return { content: [{ type: "text", text: JSON.stringify(conf, null, 2) }] };
+      }
+
+      await confirmationService.verifyAndConsumeConfirmation(workspaceId, args.confirmationToken, "record_payment");
+      const result = await paymentService.recordPayment({
+        ...args,
+        workspaceId,
+        actor,
+        sourceType: "mcp",
+      });
+      return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+    }
+  );
+
+  server.tool(
+    "get_unpaid_orders",
+    "List all orders with UNPAID payment status",
+    {},
+    async () => {
+      requireScope("payments:read");
+      const ords = await orderService.listOrders(workspaceId, { paymentStatus: "UNPAID" });
+      return { content: [{ type: "text", text: JSON.stringify(ords, null, 2) }] };
+    }
+  );
+
+  server.tool(
+    "get_partial_payment_orders",
+    "List all orders with PARTIALLY_PAID payment status",
+    {},
+    async () => {
+      requireScope("payments:read");
+      const ords = await orderService.listOrders(workspaceId, { paymentStatus: "PARTIALLY_PAID" });
+      return { content: [{ type: "text", text: JSON.stringify(ords, null, 2) }] };
+    }
+  );
+
+  server.tool(
+    "get_payment_summary",
+    "Get total cash collected, gross order value, and outstanding balance",
+    {},
+    async () => {
+      requireScope("payments:read");
+      const summary = await paymentService.getPaymentSummary(workspaceId);
+      return { content: [{ type: "text", text: JSON.stringify(summary, null, 2) }] };
+    }
+  );
+
+  // --- 9. RETURNS TOOLS ---
+
+  server.tool(
+    "list_returns",
+    "List return requests for orders",
+    {},
+    async () => {
+      requireScope("returns:read");
+      const rets = await returnService.listReturns(workspaceId);
+      return { content: [{ type: "text", text: JSON.stringify(rets, null, 2) }] };
+    }
+  );
+
+  server.tool(
+    "get_return_details",
+    "Get return details and inspection items for a return",
+    { returnId: z.string() },
+    async ({ returnId }) => {
+      requireScope("returns:read");
+      const rets = await returnService.listReturns(workspaceId);
+      const ret = rets.find((r: any) => r.returnRecord.id === returnId);
+      if (!ret) throw new Error(`Return not found: ${returnId}`);
+      return { content: [{ type: "text", text: JSON.stringify(ret, null, 2) }] };
+    }
+  );
+
+  server.tool(
+    "register_return",
+    "Register a return request for an order with return reason and items",
+    {
+      orderId: z.string(),
+      reason: z.string().min(3),
+      items: z.array(
+        z.object({
+          productId: z.string(),
+          quantity: z.coerce.number().int().positive(),
+          condition: z.enum(["sellable", "damaged"]).default("sellable"),
+        })
+      ),
+      notes: z.string().optional(),
+    },
+    async (args) => {
+      requireScope("returns:write");
+      const result = await returnService.registerReturn({
+        ...args,
+        workspaceId,
+        actor,
+        sourceType: "mcp",
+      });
+      return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+    }
+  );
+
+  server.tool(
+    "approve_return",
+    "Approve a return, restock sellable items into warehouse inventory, and issue refund (High-impact write)",
+    {
+      returnId: z.string(),
+      refundAmount: z.coerce.number().optional().default(0),
+      restockSellable: z.boolean().optional().default(true),
+      notes: z.string().optional(),
+      confirmationToken: z.string().optional(),
+    },
+    async (args) => {
+      requireScope("returns:write");
+      if (!args.confirmationToken) {
+        const conf = await confirmationService.createPendingConfirmation({
+          workspaceId,
+          clientId: principal.clientId,
+          toolName: "approve_return",
+          parameters: args,
+          riskLevel: "HIGH",
+          description: `Approve return ${args.returnId} with refund ₹${args.refundAmount.toFixed(2)}. Sellable items will be restocked to inventory.`,
+        });
+        return { content: [{ type: "text", text: JSON.stringify(conf, null, 2) }] };
+      }
+
+      await confirmationService.verifyAndConsumeConfirmation(workspaceId, args.confirmationToken, "approve_return");
+      const result = await returnService.approveReturn({
+        ...args,
+        workspaceId,
+        actor,
+        sourceType: "mcp",
+      });
+      return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+    }
+  );
+
+  server.tool(
+    "reject_return",
+    "Reject a return request with explanation",
+    { returnId: z.string(), reason: z.string().optional() },
+    async (args) => {
+      requireScope("returns:write");
+      const result = await returnService.rejectReturn({
+        ...args,
+        workspaceId,
+        actor,
+        sourceType: "mcp",
+      });
+      return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+    }
+  );
+
+  // --- 10. REPORTS TOOLS ---
+
+  server.tool(
+    "get_sales_report",
+    "Get sales report by date range",
+    { startDate: z.string().optional(), endDate: z.string().optional() },
+    async (args) => {
+      requireScope("reports:read");
+      const report = await reportService.getSalesReport(workspaceId, args);
+      return { content: [{ type: "text", text: JSON.stringify(report, null, 2) }] };
+    }
+  );
+
+  server.tool(
+    "get_order_report",
+    "Get order count, status distribution, and fulfillment stats",
+    {},
+    async () => {
+      requireScope("reports:read");
+      const overview = await reportService.getDashboardOverview(workspaceId);
+      return { content: [{ type: "text", text: JSON.stringify(overview.orders, null, 2) }] };
+    }
+  );
+
+  server.tool(
+    "get_inventory_report",
+    "Get full inventory health, valuation, and stock counts",
+    {},
+    async () => {
+      requireScope("reports:read");
+      const summary = await inventoryService.getInventorySummary(workspaceId);
+      return { content: [{ type: "text", text: JSON.stringify(summary, null, 2) }] };
+    }
+  );
+
+  server.tool(
+    "get_product_performance",
+    "Get top-selling products by quantity and revenue",
+    { limit: z.coerce.number().optional().default(10) },
+    async ({ limit }) => {
+      requireScope("reports:read");
+      const best = await reportService.getBestSellingProducts(workspaceId, limit);
+      return { content: [{ type: "text", text: JSON.stringify(best, null, 2) }] };
+    }
+  );
+
+  server.tool(
+    "get_payment_report",
+    "Get payment collections, method breakdown, and receivables",
+    {},
+    async () => {
+      requireScope("reports:read");
+      const summary = await paymentService.getPaymentSummary(workspaceId);
+      return { content: [{ type: "text", text: JSON.stringify(summary, null, 2) }] };
+    }
+  );
+
+  server.tool(
+    "get_cancellation_report",
+    "Get cancelled orders and reasons",
+    {},
+    async () => {
+      requireScope("reports:read");
+      const ords = await orderService.listOrders(workspaceId, { status: "CANCELLED" });
+      return { content: [{ type: "text", text: JSON.stringify({ count: ords.length, orders: ords }, null, 2) }] };
+    }
+  );
+
+  server.tool(
+    "get_return_report",
+    "Get return volume, approved refunds, and damaged write-offs",
+    {},
+    async () => {
+      requireScope("reports:read");
+      const rets = await returnService.listReturns(workspaceId);
+      return { content: [{ type: "text", text: JSON.stringify({ count: rets.length, returns: rets }, null, 2) }] };
+    }
+  );
+
+  server.tool(
+    "export_report_csv",
+    "Export sales or product performance as CSV text",
+    { reportType: z.enum(["sales", "products", "inventory"]) },
+    async ({ reportType }) => {
+      requireScope("reports:export");
+      if (reportType === "products" || reportType === "inventory") {
+        const prods = await productService.listProducts(workspaceId);
+        const csv = reportService.generateCsv(
+          prods.map((p: any) => ({
+            SKU: p.sku,
+            Name: p.name,
+            Category: p.categoryName,
+            PhysicalStock: p.physicalStock,
+            ReservedStock: p.reservedStock,
+            AvailableStock: p.availableStock,
+            SellingPrice: p.sellingPrice,
+            Cost: p.purchaseCost,
+          }))
+        );
+        return { content: [{ type: "text", text: csv }] };
+      } else {
+        const ords = await orderService.listOrders(workspaceId);
+        const csv = reportService.generateCsv(
+          ords.map((o: any) => ({
+            OrderNumber: o.orderNumber,
+            Customer: o.customerName || "",
+            Status: o.status,
+            TotalAmount: o.totalAmount,
+            PaymentStatus: o.paymentStatus,
+            Date: o.createdAt,
+          }))
+        );
+        return { content: [{ type: "text", text: csv }] };
+      }
+    }
+  );
+
+  // --- 11. MCP RESOURCES (Section 21) ---
+
+  server.resource(
+    "inventory-summary",
+    "inventory://summary",
+    async (uri) => {
+      requireScope("inventory:read");
+      const summary = await inventoryService.getInventorySummary(workspaceId);
+      return {
+        contents: [{ uri: uri.href, text: JSON.stringify(summary, null, 2), mimeType: "application/json" }],
+      };
+    }
+  );
+
+  server.resource(
+    "inventory-low-stock",
+    "inventory://low-stock",
+    async (uri) => {
+      requireScope("inventory:read");
+      const prods = await productService.listProducts(workspaceId, { lowStockOnly: true });
+      return {
+        contents: [{ uri: uri.href, text: JSON.stringify(prods, null, 2), mimeType: "application/json" }],
+      };
+    }
+  );
+
+  server.resource(
+    "orders-recent",
+    "orders://recent",
+    async (uri) => {
+      requireScope("orders:read");
+      const ords = await orderService.listOrders(workspaceId, { limit: 20 });
+      return {
+        contents: [{ uri: uri.href, text: JSON.stringify(ords, null, 2), mimeType: "application/json" }],
+      };
+    }
+  );
+
+  server.resource(
+    "orders-packing-queue",
+    "orders://packing-queue",
+    async (uri) => {
+      requireScope("packing:read");
+      const queue = await packingService.listOrdersToPack(workspaceId);
+      return {
+        contents: [{ uri: uri.href, text: JSON.stringify(queue, null, 2), mimeType: "application/json" }],
+      };
+    }
+  );
+
+  server.resource(
+    "reports-dashboard",
+    "reports://dashboard",
+    async (uri) => {
+      requireScope("dashboard:read");
+      const overview = await reportService.getDashboardOverview(workspaceId);
+      return {
+        contents: [{ uri: uri.href, text: JSON.stringify(overview, null, 2), mimeType: "application/json" }],
+      };
+    }
+  );
+
+  // --- 12. MCP PROMPTS (Section 22) ---
+
+  server.prompt(
+    "daily_business_summary",
+    "Generate comprehensive daily executive summary for store operations",
+    {},
+    async () => {
+      return {
+        description: "Analyze daily operations, new orders, packing backlog, and inventory movements.",
+        messages: [
+          {
+            role: "user",
+            content: {
+              type: "text",
+              text: "Please query `get_dashboard_summary`, `get_low_stock_products`, and `list_orders_to_pack`. Summarize today's key operational metrics, highlight urgent bottlenecks, and outline actions for warehouse staff.",
+            },
+          },
+        ],
+      };
+    }
+  );
+
+  server.prompt(
+    "prepare_packing_list",
+    "Review orders in packing queue and prepare consolidated picking list",
+    {},
+    async () => {
+      return {
+        description: "Review pending orders and prepare itemized picking list.",
+        messages: [
+          {
+            role: "user",
+            content: {
+              type: "text",
+              text: "Please call `list_orders_to_pack`, aggregate the required product SKUs and quantities across all orders, and generate a clear warehouse picking list.",
+            },
+          },
+        ],
+      };
+    }
+  );
+
+  server.prompt(
+    "identify_low_stock",
+    "Check inventory levels and recommend stock reorders",
+    {},
+    async () => {
+      return {
+        description: "Identify all items below reorder threshold and formulate replenishment advice.",
+        messages: [
+          {
+            role: "user",
+            content: {
+              type: "text",
+              text: "Please call `get_low_stock_products` and `get_product_performance`. Identify which top-selling items are at risk of stockout and recommend suggested reorder quantities.",
+            },
+          },
+        ],
+      };
+    }
+  );
+
+  return server;
+}
