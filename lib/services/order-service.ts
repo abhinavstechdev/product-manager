@@ -6,9 +6,11 @@ import {
   customers,
   products,
   payments,
+  shipments,
+  returns,
   idempotencyRecords,
 } from "../db/schema";
-import { eq, and, sql, desc } from "drizzle-orm";
+import { eq, and, or, sql, desc } from "drizzle-orm";
 import { reserveStockForOrder, releaseStockForOrder, StockActor } from "./inventory-service";
 import { logAuditEvent } from "../audit/audit-service";
 
@@ -498,4 +500,81 @@ export async function listOrders(workspaceId: string, options?: {
   }
 
   return filtered;
+}
+
+export async function deleteOrder(params: {
+  workspaceId: string;
+  orderIdOrNumber: string;
+  actor: StockActor;
+  force?: boolean;
+}) {
+  const db = await getDb();
+  const [order] = await (db as any)
+    .select()
+    .from(orders)
+    .where(
+      and(
+        eq(orders.workspaceId, params.workspaceId),
+        or(
+          eq(orders.id, params.orderIdOrNumber),
+          eq(orders.orderNumber, params.orderIdOrNumber.toUpperCase())
+        )
+      )
+    )
+    .limit(1);
+
+  if (!order) {
+    throw new Error(`Order not found: "${params.orderIdOrNumber}"`);
+  }
+
+  // Get items
+  const items = await (db as any)
+    .select()
+    .from(orderItems)
+    .where(eq(orderItems.orderId, order.id));
+
+  // If order is in active reserved state (NEW, CONFIRMED, PROCESSING, PACKED), release reserved inventory!
+  if (["NEW", "CONFIRMED", "PROCESSING", "PACKED"].includes(order.status)) {
+    await releaseStockForOrder({
+      workspaceId: params.workspaceId,
+      orderId: order.id,
+      orderNumber: order.orderNumber,
+      items: items.map((i: any) => ({ productId: i.productId, quantity: i.quantity })),
+      actor: params.actor,
+      reason: `Order ${order.orderNumber} deleted`,
+    });
+  } else if (["SHIPPED", "DELIVERED"].includes(order.status) && !params.force) {
+    throw new Error(
+      `Order ${order.orderNumber} is already '${order.status}'. To delete anyway, set force: true.`
+    );
+  }
+
+  // Delete cascaded records and order
+  await (db as any).delete(orderItems).where(eq(orderItems.orderId, order.id));
+  await (db as any).delete(orderStatusHistory).where(eq(orderStatusHistory.orderId, order.id));
+  await (db as any).delete(shipments).where(eq(shipments.orderId, order.id));
+  await (db as any).delete(payments).where(eq(payments.orderId, order.id));
+  await (db as any).delete(returns).where(eq(returns.orderId, order.id));
+  await (db as any).delete(orders).where(eq(orders.id, order.id));
+
+  await logAuditEvent({
+    workspaceId: params.workspaceId,
+    actorId: params.actor.id,
+    actorName: params.actor.name,
+    actorType: params.actor.type === "AI_AGENT" ? "AI_CLIENT" : "USER",
+    toolName: params.actor.type === "AI_AGENT" ? "delete_order" : null,
+    operation: "DELETE_ORDER",
+    targetRecord: order.orderNumber,
+    beforeState: order,
+    afterState: null,
+    outcome: "SUCCESS",
+  });
+
+  return {
+    success: true,
+    deletedId: order.id,
+    orderNumber: order.orderNumber,
+    status: order.status,
+    releasedItemsCount: items.length,
+  };
 }

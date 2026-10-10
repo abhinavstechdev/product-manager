@@ -209,3 +209,70 @@ export async function getPaymentSummary(workspaceId: string) {
     paidCount,
   };
 }
+
+export async function deletePayment(params: {
+  workspaceId: string;
+  paymentId: string;
+  actor: StockActor;
+}) {
+  const db = await getDb();
+  const [payment] = await (db as any)
+    .select()
+    .from(payments)
+    .where(and(eq(payments.id, params.paymentId), eq(payments.workspaceId, params.workspaceId)))
+    .limit(1);
+
+  if (!payment) {
+    throw new Error(`Payment not found: "${params.paymentId}"`);
+  }
+
+  // Delete payment
+  await (db as any).delete(payments).where(eq(payments.id, payment.id));
+
+  // Recalculate remaining payments for the order
+  const remainingPayments = await (db as any)
+    .select()
+    .from(payments)
+    .where(eq(payments.orderId, payment.orderId));
+
+  let totalPaidRemaining = 0;
+  for (const p of remainingPayments) {
+    totalPaidRemaining += parseFloat(p.amount);
+  }
+
+  const [order] = await (db as any)
+    .select()
+    .from(orders)
+    .where(eq(orders.id, payment.orderId))
+    .limit(1);
+
+  if (order) {
+    const orderTotal = parseFloat(order.totalAmount);
+    let updatedPaymentStatus = "UNPAID";
+    if (totalPaidRemaining >= orderTotal && orderTotal > 0) {
+      updatedPaymentStatus = "PAID";
+    } else if (totalPaidRemaining > 0) {
+      updatedPaymentStatus = "PARTIALLY_PAID";
+    }
+
+    await (db as any)
+      .update(orders)
+      .set({ paymentStatus: updatedPaymentStatus, updatedAt: new Date() })
+      .where(eq(orders.id, order.id));
+  }
+
+  await logAuditEvent({
+    workspaceId: params.workspaceId,
+    actorId: params.actor.id,
+    actorName: params.actor.name,
+    actorType: params.actor.type === "AI_AGENT" ? "AI_CLIENT" : "USER",
+    toolName: params.actor.type === "AI_AGENT" ? "delete_payment" : null,
+    operation: "DELETE_PAYMENT",
+    targetRecord: payment.id,
+    beforeState: payment,
+    afterState: null,
+    outcome: "SUCCESS",
+  });
+
+  return { success: true, deletedId: payment.id, orderId: payment.orderId, amount: payment.amount };
+}

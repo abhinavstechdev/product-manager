@@ -26,7 +26,7 @@ export function createMcpServer(principal: McpAuthPrincipal) {
     },
     {
       instructions:
-        "Apex Inventory & Order Management Platform. Core rules: Available stock = Physical - Reserved. Always verify product SKU using get_product or search before creating orders or adjustments. High-impact operations (negative stock adjustments, order cancellations) require confirmation tokens via request_action_confirmation. Packing slips exclude customer payment details. Delivered status does not mark order as paid. Use get_user_profile to identify operator context.",
+        "Apex Inventory & Order Management Platform. Core rules: Available stock = Physical - Reserved. Always verify product SKU using get_product or search before creating orders or adjustments. Destructive operations (delete_product, delete_order, delete_customer, delete_category, delete_payment, delete_return) and high-impact operations (negative stock adjustments, order cancellations) require confirmation tokens or explicit confirmed=true flags in compliance with the ChatGPT MCP specification. Packing slips exclude customer payment details. Delivered status does not mark order as paid. Use get_user_profile to identify operator context.",
       capabilities: {
         tools: { listChanged: true },
         resources: { subscribe: false, listChanged: true },
@@ -1485,6 +1485,380 @@ export function createMcpServer(principal: McpAuthPrincipal) {
         );
         return { content: [{ type: "text", text: csv }] };
       }
+    }
+  );
+
+  // --- 10B. DESTRUCTIVE DELETION TOOLS (CHATGPT MCP COMPLIANCE) ---
+
+  server.registerTool(
+    "delete_product",
+    {
+      title: "Delete Product",
+      description:
+        "Permanently delete a product from the catalog. Destructive action requiring explicit confirmation. Unfulfilled orders reserving this product will block deletion unless force: true is specified.",
+      inputSchema: {
+        productIdOrSku: z.string().describe("The product ID or SKU to permanently delete"),
+        confirmed: z.boolean().optional().default(false).describe("Explicit confirmation flag to execute deletion"),
+        confirmationToken: z.string().optional().describe("Confirmation token if pre-authorized via confirmation flow"),
+        force: z.boolean().optional().default(false).describe("Force deletion even if past non-active orders reference this product"),
+      },
+      annotations: {
+        readOnlyHint: false,
+        openWorldHint: false,
+        destructiveHint: true,
+      },
+    },
+    async ({ productIdOrSku, confirmed, confirmationToken, force }) => {
+      requireScope("products:write");
+      if (!confirmed && !confirmationToken) {
+        const conf = await confirmationService.createPendingConfirmation({
+          workspaceId,
+          clientId: principal.clientId,
+          toolName: "delete_product",
+          parameters: { productIdOrSku, force },
+          riskLevel: "HIGH",
+          description: `Permanently delete product "${productIdOrSku}" from catalog.${force ? " (Force mode enabled)" : ""}`,
+        });
+        return {
+          content: [
+            {
+              type: "text",
+              text: `DESTRUCTIVE ACTION CONFIRMATION REQUIRED:\nPermanently deleting product "${productIdOrSku}". To proceed, call delete_product with confirmed: true or confirmationToken: "${conf.confirmationToken}".`,
+            },
+          ],
+          structuredContent: conf,
+        };
+      }
+
+      if (confirmationToken) {
+        await confirmationService.verifyAndConsumeConfirmation(workspaceId, confirmationToken, "delete_product");
+      }
+
+      const result = await productService.deleteProduct({
+        workspaceId,
+        productIdOrSku,
+        actor,
+        force,
+      });
+
+      return {
+        content: [
+          {
+            type: "text",
+            text: `Product ${result.name} (SKU: ${result.sku}, ID: ${result.deletedId}) was permanently deleted.`,
+          },
+        ],
+        structuredContent: result,
+      };
+    }
+  );
+
+  server.registerTool(
+    "delete_order",
+    {
+      title: "Delete Order",
+      description:
+        "Permanently delete an order and automatically release any reserved warehouse inventory back to available stock. Destructive action requiring explicit confirmation.",
+      inputSchema: {
+        orderIdOrNumber: z.string().describe("The order ID (e.g. ord_...) or order number (e.g. ORD-1001) to permanently delete"),
+        confirmed: z.boolean().optional().default(false).describe("Explicit confirmation flag to execute deletion"),
+        confirmationToken: z.string().optional().describe("Confirmation token if pre-authorized via confirmation flow"),
+        force: z.boolean().optional().default(false).describe("Force deletion if order is already marked SHIPPED or DELIVERED"),
+      },
+      annotations: {
+        readOnlyHint: false,
+        openWorldHint: false,
+        destructiveHint: true,
+      },
+    },
+    async ({ orderIdOrNumber, confirmed, confirmationToken, force }) => {
+      requireScope("orders:cancel");
+      if (!confirmed && !confirmationToken) {
+        const conf = await confirmationService.createPendingConfirmation({
+          workspaceId,
+          clientId: principal.clientId,
+          toolName: "delete_order",
+          parameters: { orderIdOrNumber, force },
+          riskLevel: "HIGH",
+          description: `Permanently delete order "${orderIdOrNumber}" and release any reserved inventory back to available stock.`,
+        });
+        return {
+          content: [
+            {
+              type: "text",
+              text: `DESTRUCTIVE ACTION CONFIRMATION REQUIRED:\nPermanently deleting order "${orderIdOrNumber}". Any active inventory reservations will be automatically released. To proceed, call delete_order with confirmed: true or confirmationToken: "${conf.confirmationToken}".`,
+            },
+          ],
+          structuredContent: conf,
+        };
+      }
+
+      if (confirmationToken) {
+        await confirmationService.verifyAndConsumeConfirmation(workspaceId, confirmationToken, "delete_order");
+      }
+
+      const result = await orderService.deleteOrder({
+        workspaceId,
+        orderIdOrNumber,
+        actor,
+        force,
+      });
+
+      return {
+        content: [
+          {
+            type: "text",
+            text: `Order ${result.orderNumber} (ID: ${result.deletedId}) was permanently deleted and reserved stock was released.`,
+          },
+        ],
+        structuredContent: result,
+      };
+    }
+  );
+
+  server.registerTool(
+    "delete_customer",
+    {
+      title: "Delete Customer",
+      description:
+        "Permanently delete a customer account. Blocked if customer has active unfulfilled orders unless force: true is specified. Destructive action requiring explicit confirmation.",
+      inputSchema: {
+        customerId: z.string().describe("The customer ID (e.g. cust_...) to permanently delete"),
+        confirmed: z.boolean().optional().default(false).describe("Explicit confirmation flag to execute deletion"),
+        confirmationToken: z.string().optional().describe("Confirmation token if pre-authorized via confirmation flow"),
+        force: z.boolean().optional().default(false).describe("Force deletion and cascade delete customer's orders"),
+      },
+      annotations: {
+        readOnlyHint: false,
+        openWorldHint: false,
+        destructiveHint: true,
+      },
+    },
+    async ({ customerId, confirmed, confirmationToken, force }) => {
+      requireScope("customers:write");
+      if (!confirmed && !confirmationToken) {
+        const conf = await confirmationService.createPendingConfirmation({
+          workspaceId,
+          clientId: principal.clientId,
+          toolName: "delete_customer",
+          parameters: { customerId, force },
+          riskLevel: "HIGH",
+          description: `Permanently delete customer record "${customerId}".${force ? " (Force mode enabled: cascades all customer orders)" : ""}`,
+        });
+        return {
+          content: [
+            {
+              type: "text",
+              text: `DESTRUCTIVE ACTION CONFIRMATION REQUIRED:\nPermanently deleting customer "${customerId}". To proceed, call delete_customer with confirmed: true or confirmationToken: "${conf.confirmationToken}".`,
+            },
+          ],
+          structuredContent: conf,
+        };
+      }
+
+      if (confirmationToken) {
+        await confirmationService.verifyAndConsumeConfirmation(workspaceId, confirmationToken, "delete_customer");
+      }
+
+      const result = await customerService.deleteCustomer({
+        workspaceId,
+        customerId,
+        actor,
+        force,
+      });
+
+      return {
+        content: [
+          {
+            type: "text",
+            text: `Customer ${result.name} (ID: ${result.deletedId}) was permanently deleted.`,
+          },
+        ],
+        structuredContent: result,
+      };
+    }
+  );
+
+  server.registerTool(
+    "delete_category",
+    {
+      title: "Delete Category",
+      description:
+        "Delete a product category. Any products assigned to this category will be preserved with category set to null. Destructive action requiring explicit confirmation.",
+      inputSchema: {
+        categoryId: z.string().describe("The category ID (e.g. cat_...) to delete"),
+        confirmed: z.boolean().optional().default(false).describe("Explicit confirmation flag to execute deletion"),
+        confirmationToken: z.string().optional().describe("Confirmation token if pre-authorized via confirmation flow"),
+      },
+      annotations: {
+        readOnlyHint: false,
+        openWorldHint: false,
+        destructiveHint: true,
+      },
+    },
+    async ({ categoryId, confirmed, confirmationToken }) => {
+      requireScope("products:write");
+      if (!confirmed && !confirmationToken) {
+        const conf = await confirmationService.createPendingConfirmation({
+          workspaceId,
+          clientId: principal.clientId,
+          toolName: "delete_category",
+          parameters: { categoryId },
+          riskLevel: "HIGH",
+          description: `Delete category "${categoryId}" and unlink associated products.`,
+        });
+        return {
+          content: [
+            {
+              type: "text",
+              text: `DESTRUCTIVE ACTION CONFIRMATION REQUIRED:\nDeleting category "${categoryId}". Associated products will be unlinked. To proceed, call delete_category with confirmed: true or confirmationToken: "${conf.confirmationToken}".`,
+            },
+          ],
+          structuredContent: conf,
+        };
+      }
+
+      if (confirmationToken) {
+        await confirmationService.verifyAndConsumeConfirmation(workspaceId, confirmationToken, "delete_category");
+      }
+
+      const result = await productService.deleteCategory({
+        workspaceId,
+        categoryId,
+        actor,
+      });
+
+      return {
+        content: [
+          {
+            type: "text",
+            text: `Category ${result.name} (ID: ${result.deletedId}) was deleted and its products were unlinked.`,
+          },
+        ],
+        structuredContent: result,
+      };
+    }
+  );
+
+  server.registerTool(
+    "delete_payment",
+    {
+      title: "Delete Payment",
+      description:
+        "Delete a recorded payment. Automatically recalculates order payment balance and restores order payment status to PARTIALLY_PAID or UNPAID. Destructive action requiring explicit confirmation.",
+      inputSchema: {
+        paymentId: z.string().describe("The payment ID (e.g. pay_...) to delete"),
+        confirmed: z.boolean().optional().default(false).describe("Explicit confirmation flag to execute deletion"),
+        confirmationToken: z.string().optional().describe("Confirmation token if pre-authorized via confirmation flow"),
+      },
+      annotations: {
+        readOnlyHint: false,
+        openWorldHint: false,
+        destructiveHint: true,
+      },
+    },
+    async ({ paymentId, confirmed, confirmationToken }) => {
+      requireScope("payments:write");
+      if (!confirmed && !confirmationToken) {
+        const conf = await confirmationService.createPendingConfirmation({
+          workspaceId,
+          clientId: principal.clientId,
+          toolName: "delete_payment",
+          parameters: { paymentId },
+          riskLevel: "HIGH",
+          description: `Delete payment record "${paymentId}" and recalculate order payment status.`,
+        });
+        return {
+          content: [
+            {
+              type: "text",
+              text: `DESTRUCTIVE ACTION CONFIRMATION REQUIRED:\nDeleting payment "${paymentId}". Associated order payment status will be recalculated. To proceed, call delete_payment with confirmed: true or confirmationToken: "${conf.confirmationToken}".`,
+            },
+          ],
+          structuredContent: conf,
+        };
+      }
+
+      if (confirmationToken) {
+        await confirmationService.verifyAndConsumeConfirmation(workspaceId, confirmationToken, "delete_payment");
+      }
+
+      const result = await paymentService.deletePayment({
+        workspaceId,
+        paymentId,
+        actor,
+      });
+
+      return {
+        content: [
+          {
+            type: "text",
+            text: `Payment ${result.deletedId} for order ${result.orderId} (amount: ₹${result.amount}) was deleted.`,
+          },
+        ],
+        structuredContent: result,
+      };
+    }
+  );
+
+  server.registerTool(
+    "delete_return",
+    {
+      title: "Delete Return",
+      description:
+        "Delete a customer return request record and associated return items. Destructive action requiring explicit confirmation.",
+      inputSchema: {
+        returnId: z.string().describe("The return ID (e.g. ret_...) to delete"),
+        confirmed: z.boolean().optional().default(false).describe("Explicit confirmation flag to execute deletion"),
+        confirmationToken: z.string().optional().describe("Confirmation token if pre-authorized via confirmation flow"),
+      },
+      annotations: {
+        readOnlyHint: false,
+        openWorldHint: false,
+        destructiveHint: true,
+      },
+    },
+    async ({ returnId, confirmed, confirmationToken }) => {
+      requireScope("returns:write");
+      if (!confirmed && !confirmationToken) {
+        const conf = await confirmationService.createPendingConfirmation({
+          workspaceId,
+          clientId: principal.clientId,
+          toolName: "delete_return",
+          parameters: { returnId },
+          riskLevel: "HIGH",
+          description: `Delete return request "${returnId}".`,
+        });
+        return {
+          content: [
+            {
+              type: "text",
+              text: `DESTRUCTIVE ACTION CONFIRMATION REQUIRED:\nDeleting return record "${returnId}". To proceed, call delete_return with confirmed: true or confirmationToken: "${conf.confirmationToken}".`,
+            },
+          ],
+          structuredContent: conf,
+        };
+      }
+
+      if (confirmationToken) {
+        await confirmationService.verifyAndConsumeConfirmation(workspaceId, confirmationToken, "delete_return");
+      }
+
+      const result = await returnService.deleteReturn({
+        workspaceId,
+        returnId,
+        actor,
+      });
+
+      return {
+        content: [
+          {
+            type: "text",
+            text: `Return record ${result.deletedId} for order ${result.orderId} was deleted.`,
+          },
+        ],
+        structuredContent: result,
+      };
     }
   );
 

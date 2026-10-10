@@ -1,5 +1,5 @@
 import { getDb } from "../db/client";
-import { products, categories, inventoryTransactions } from "../db/schema";
+import { products, categories, inventoryTransactions, orders, orderItems } from "../db/schema";
 import { eq, and, sql, desc, or, ilike } from "drizzle-orm";
 import { StockActor } from "./inventory-service";
 import { logAuditEvent } from "../audit/audit-service";
@@ -226,4 +226,130 @@ export async function createCategory(params: {
     createdAt: new Date(),
   });
   return { id, name: params.name };
+}
+
+export async function deleteProduct(params: {
+  workspaceId: string;
+  productIdOrSku: string;
+  actor: StockActor;
+  force?: boolean;
+}) {
+  const db = await getDb();
+  const [product] = await (db as any)
+    .select()
+    .from(products)
+    .where(
+      and(
+        eq(products.workspaceId, params.workspaceId),
+        or(
+          eq(products.id, params.productIdOrSku),
+          eq(products.sku, params.productIdOrSku.toUpperCase())
+        )
+      )
+    )
+    .limit(1);
+
+  if (!product) {
+    throw new Error(`Product not found: "${params.productIdOrSku}"`);
+  }
+
+  // Check if unfulfilled active orders contain this product
+  const activeOrderRows = await (db as any)
+    .select({
+      orderId: orders.id,
+      orderNumber: orders.orderNumber,
+      status: orders.status,
+    })
+    .from(orderItems)
+    .innerJoin(orders, eq(orderItems.orderId, orders.id))
+    .where(
+      and(
+        eq(orderItems.productId, product.id),
+        sql`${orders.status} IN ('NEW', 'CONFIRMED', 'PROCESSING', 'PACKED')`
+      )
+    );
+
+  if (activeOrderRows.length > 0 && !params.force) {
+    const orderNumbers = activeOrderRows.map((r: any) => r.orderNumber).join(", ");
+    throw new Error(
+      `Cannot delete product "${product.name}" (SKU: ${product.sku}) because it is reserved in active unfulfilled order(s): ${orderNumbers}. Please cancel or fulfill those orders first.`
+    );
+  }
+
+  // Clean up order items and transactions for this product
+  await (db as any)
+    .delete(orderItems)
+    .where(eq(orderItems.productId, product.id));
+
+  await (db as any)
+    .delete(inventoryTransactions)
+    .where(eq(inventoryTransactions.productId, product.id));
+
+  // Delete product
+  await (db as any)
+    .delete(products)
+    .where(eq(products.id, product.id));
+
+  await logAuditEvent({
+    workspaceId: params.workspaceId,
+    actorId: params.actor.id,
+    actorName: params.actor.name,
+    actorType: params.actor.type === "AI_AGENT" ? "AI_CLIENT" : "USER",
+    toolName: params.actor.type === "AI_AGENT" ? "delete_product" : null,
+    operation: "DELETE_PRODUCT",
+    targetRecord: product.sku,
+    beforeState: product,
+    afterState: null,
+    outcome: "SUCCESS",
+  });
+
+  return {
+    success: true,
+    deletedId: product.id,
+    sku: product.sku,
+    name: product.name,
+  };
+}
+
+export async function deleteCategory(params: {
+  workspaceId: string;
+  categoryId: string;
+  actor: StockActor;
+}) {
+  const db = await getDb();
+  const [category] = await (db as any)
+    .select()
+    .from(categories)
+    .where(and(eq(categories.workspaceId, params.workspaceId), eq(categories.id, params.categoryId)))
+    .limit(1);
+
+  if (!category) {
+    throw new Error(`Category not found: "${params.categoryId}"`);
+  }
+
+  // Set categoryId to null on associated products
+  await (db as any)
+    .update(products)
+    .set({ categoryId: null })
+    .where(eq(products.categoryId, category.id));
+
+  // Delete category
+  await (db as any)
+    .delete(categories)
+    .where(eq(categories.id, category.id));
+
+  await logAuditEvent({
+    workspaceId: params.workspaceId,
+    actorId: params.actor.id,
+    actorName: params.actor.name,
+    actorType: params.actor.type === "AI_AGENT" ? "AI_CLIENT" : "USER",
+    toolName: params.actor.type === "AI_AGENT" ? "delete_category" : null,
+    operation: "DELETE_CATEGORY",
+    targetRecord: category.id,
+    beforeState: category,
+    afterState: null,
+    outcome: "SUCCESS",
+  });
+
+  return { success: true, deletedId: category.id, name: category.name };
 }

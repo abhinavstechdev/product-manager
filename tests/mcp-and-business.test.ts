@@ -223,6 +223,142 @@ async function runTests() {
   });
   console.log("✓ MCP resources/read on skill URI returned content length:", resourceReadData?.result?.contents?.[0]?.text?.length);
 
+  // 13. Test ChatGPT MCP Compliant Destructive Deletion Tools
+  console.log("\n--- Testing Destructive Deletion Tools (ChatGPT MCP Guide Compliance) ---");
+
+  // Verify annotations on delete tools in tools/list
+  const deleteToolNames = [
+    "delete_product",
+    "delete_order",
+    "delete_customer",
+    "delete_category",
+    "delete_payment",
+    "delete_return",
+  ];
+
+  for (const name of deleteToolNames) {
+    const tool = toolsData.result.tools.find((t: any) => t.name === name);
+    if (!tool) throw new Error(`Missing destructive tool '${name}' in tools/list!`);
+    if (tool.annotations?.destructiveHint !== true) {
+      throw new Error(`Tool '${name}' must have annotations.destructiveHint: true for ChatGPT MCP compliance!`);
+    }
+    if (tool.annotations?.readOnlyHint !== false) {
+      throw new Error(`Tool '${name}' must have annotations.readOnlyHint: false!`);
+    }
+    console.log(`✓ Verified ChatGPT MCP compliance for '${name}': destructiveHint = true, readOnlyHint = false`);
+  }
+
+  // Create a dedicated product and order to test deletions
+  const testDelProduct = await sendMcpRequest({
+    jsonrpc: "2.0",
+    id: 8,
+    method: "tools/call",
+    params: {
+      name: "create_product",
+      arguments: {
+        name: "Temporary Deletion Test Item",
+        sku: "TEST-DEL-" + Date.now(),
+        purchaseCost: 50,
+        sellingPrice: 100,
+        initialStock: 20,
+      },
+    },
+  });
+  const delProdResult = JSON.parse(testDelProduct.result.content[0].text);
+  const delProdId = delProdResult.id;
+  console.log("✓ Created test product for deletion:", delProdId);
+
+  // Create order reserving stock of this product
+  const testDelOrder = await orderService.createOrder({
+    workspaceId: principal.workspaceId,
+    customerId: "cust_priya_sharma",
+    shippingAddress: "Test Address for Deletion",
+    source: "MCP Test",
+    items: [{ productId: delProdId, quantity: 3 }],
+    actor: { id: "test_suite", name: "Vitest Automated Runner", type: "AI_AGENT" },
+    sourceType: "mcp",
+  });
+  console.log("✓ Created order reserving 3 units of test product:", testDelOrder.orderNumber);
+
+  // Attempt delete_order WITHOUT confirmation -> must require confirmation
+  const unconfirmedDelOrder = await sendMcpRequest({
+    jsonrpc: "2.0",
+    id: 9,
+    method: "tools/call",
+    params: {
+      name: "delete_order",
+      arguments: {
+        orderIdOrNumber: testDelOrder.orderId,
+      },
+    },
+  });
+  const unconfirmedOrderRes = unconfirmedDelOrder.result?.structuredContent;
+  if (!unconfirmedOrderRes?.confirmationRequired || !unconfirmedOrderRes?.confirmationToken) {
+    throw new Error("delete_order without confirmation failed to trigger confirmation requirement!");
+  }
+  console.log("✓ Unconfirmed delete_order correctly blocked and returned confirmation token:", unconfirmedOrderRes.confirmationToken);
+
+  // Delete order with confirmed: true -> must succeed and release the 3 reserved units
+  const confirmedDelOrder = await sendMcpRequest({
+    jsonrpc: "2.0",
+    id: 10,
+    method: "tools/call",
+    params: {
+      name: "delete_order",
+      arguments: {
+        orderIdOrNumber: testDelOrder.orderId,
+        confirmed: true,
+      },
+    },
+  });
+  console.log("✓ Confirmed delete_order output:", confirmedDelOrder.result.content[0].text);
+  if (!confirmedDelOrder.result.structuredContent?.success) {
+    throw new Error("Confirmed delete_order failed!");
+  }
+
+  // Delete product with confirmed: true
+  const confirmedDelProduct = await sendMcpRequest({
+    jsonrpc: "2.0",
+    id: 11,
+    method: "tools/call",
+    params: {
+      name: "delete_product",
+      arguments: {
+        productIdOrSku: delProdId,
+        confirmed: true,
+      },
+    },
+  });
+  console.log("✓ Confirmed delete_product output:", confirmedDelProduct.result.content[0].text);
+  if (!confirmedDelProduct.result.structuredContent?.success) {
+    throw new Error("Confirmed delete_product failed!");
+  }
+
+  // Test delete_category
+  const testCat = await sendMcpRequest({
+    jsonrpc: "2.0",
+    id: 12,
+    method: "tools/call",
+    params: {
+      name: "create_category",
+      arguments: { name: "Temp Category " + Date.now() },
+    },
+  });
+  const createdCat = JSON.parse(testCat.result.content[0].text);
+  const delCatRes = await sendMcpRequest({
+    jsonrpc: "2.0",
+    id: 13,
+    method: "tools/call",
+    params: {
+      name: "delete_category",
+      arguments: { categoryId: createdCat.id, confirmed: true },
+    },
+  });
+  console.log("✓ Confirmed delete_category output:", delCatRes.result.content[0].text);
+  if (!delCatRes.result.structuredContent?.success) {
+    throw new Error("Confirmed delete_category failed!");
+  }
+
   console.log("\n=======================================================");
   console.log("ALL PLATFORM AND MCP VERIFICATION TESTS PASSED CLEANLY!");
   console.log("=======================================================\n");

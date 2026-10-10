@@ -284,3 +284,39 @@ export async function listReturns(workspaceId: string) {
     .where(eq(returns.workspaceId, workspaceId))
     .orderBy(desc(returns.createdAt));
 }
+
+export async function deleteReturn(params: {
+  workspaceId: string;
+  returnId: string;
+  actor: StockActor;
+}) {
+  const db = await getDb();
+  const [ret] = await (db as any)
+    .select()
+    .from(returns)
+    .where(and(eq(returns.id, params.returnId), eq(returns.workspaceId, params.workspaceId)))
+    .limit(1);
+
+  if (!ret) {
+    throw new Error(`Return record not found: "${params.returnId}"`);
+  }
+
+  // Delete return items and return
+  await (db as any).delete(returnItems).where(eq(returnItems.returnId, ret.id));
+  await (db as any).delete(returns).where(eq(returns.id, ret.id));
+
+  await logAuditEvent({
+    workspaceId: params.workspaceId,
+    actorId: params.actor.id,
+    actorName: params.actor.name,
+    actorType: params.actor.type === "AI_AGENT" ? "AI_CLIENT" : "USER",
+    toolName: params.actor.type === "AI_AGENT" ? "delete_return" : null,
+    operation: "DELETE_RETURN",
+    targetRecord: ret.id,
+    beforeState: ret,
+    afterState: null,
+    outcome: "SUCCESS",
+  });
+
+  return { success: true, deletedId: ret.id, orderId: ret.orderId };
+}

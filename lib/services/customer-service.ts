@@ -132,3 +132,72 @@ export async function updateCustomer(params: {
 
   return { success: true, customerId: cust.id };
 }
+
+export async function deleteCustomer(params: {
+  workspaceId: string;
+  customerId: string;
+  actor: StockActor;
+  force?: boolean;
+}) {
+  const db = await getDb();
+  const [cust] = await (db as any)
+    .select()
+    .from(customers)
+    .where(and(eq(customers.id, params.customerId), eq(customers.workspaceId, params.workspaceId)))
+    .limit(1);
+
+  if (!cust) {
+    throw new Error(`Customer not found: "${params.customerId}"`);
+  }
+
+  // Check if active unfulfilled orders exist for this customer
+  const activeOrders = await (db as any)
+    .select({ id: orders.id, orderNumber: orders.orderNumber, status: orders.status })
+    .from(orders)
+    .where(
+      and(
+        eq(orders.customerId, cust.id),
+        eq(orders.workspaceId, params.workspaceId),
+        sql`${orders.status} IN ('NEW', 'CONFIRMED', 'PROCESSING', 'PACKED')`
+      )
+    );
+
+  if (activeOrders.length > 0 && !params.force) {
+    const orderNumbers = activeOrders.map((o: any) => o.orderNumber).join(", ");
+    throw new Error(
+      `Cannot delete customer "${cust.name}" because they have active unfulfilled orders: ${orderNumbers}. Please cancel, fulfill, or delete those orders first.`
+    );
+  }
+
+  // If force, delete customer's orders and cascade
+  if (params.force) {
+    const allCustomerOrders = await (db as any)
+      .select({ id: orders.id })
+      .from(orders)
+      .where(and(eq(orders.customerId, cust.id), eq(orders.workspaceId, params.workspaceId)));
+
+    for (const o of allCustomerOrders) {
+      await (db as any).delete(orders).where(eq(orders.id, o.id));
+    }
+  }
+
+  // Delete customer
+  await (db as any)
+    .delete(customers)
+    .where(eq(customers.id, cust.id));
+
+  await logAuditEvent({
+    workspaceId: params.workspaceId,
+    actorId: params.actor.id,
+    actorName: params.actor.name,
+    actorType: params.actor.type === "AI_AGENT" ? "AI_CLIENT" : "USER",
+    toolName: params.actor.type === "AI_AGENT" ? "delete_customer" : null,
+    operation: "DELETE_CUSTOMER",
+    targetRecord: cust.name,
+    beforeState: cust,
+    afterState: null,
+    outcome: "SUCCESS",
+  });
+
+  return { success: true, deletedId: cust.id, name: cust.name };
+}
