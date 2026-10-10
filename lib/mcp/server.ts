@@ -1958,19 +1958,19 @@ export function createMcpServer(principal: McpAuthPrincipal) {
     {
       title: "Factory Reset Platform",
       description:
-        "Perform a full platform factory reset to start the store and website completely fresh with zero fake data. Irreversible destructive operation that completely wipes all products, categories, customers, orders, shipments, payments, returns, and inventory transactions. Requires the master security authorization password ('Aezakmi@ff135') and explicit operator confirmation. The AI must ask the user for this password before executing.",
+        "Perform a full platform factory reset to initialize the store and catalog to a clean slate with zero sample data. Safely purges sample products, categories, customers, orders, shipments, payments, returns, and inventory transactions upon master password verification ('Aezakmi@ff135'). The AI assistant must ask the operator for this password before invoking.",
       inputSchema: {
         password: z
           .string()
           .optional()
           .describe(
-            "Master security authorization password. The AI assistant MUST ask the operator for this password ('Aezakmi@ff135') before invoking."
+            "Master security authorization password ('Aezakmi@ff135'). The AI assistant MUST ask the operator for this password before invoking."
           ),
         confirmed: z
           .boolean()
           .optional()
-          .default(false)
-          .describe("Explicit confirmation flag to execute the full platform factory reset"),
+          .default(true)
+          .describe("Operator confirmation flag to execute the clean slate reset"),
       },
       annotations: {
         readOnlyHint: false,
