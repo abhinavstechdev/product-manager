@@ -287,7 +287,11 @@ async function runTests() {
   // Create order reserving stock of this product
   const testDelOrder = await orderService.createOrder({
     workspaceId: principal.workspaceId,
-    customerId: "cust_priya_sharma",
+    newCustomer: {
+      name: "Deletion Test Customer",
+      phone: "+91 99999 00000",
+      shippingAddress: "Test Address for Deletion",
+    },
     shippingAddress: "Test Address for Deletion",
     source: "MCP Test",
     items: [{ productId: delProdId, quantity: 3 }],
@@ -408,29 +412,14 @@ async function runTests() {
   }
   console.log("✓ factory_reset with wrong password correctly rejected");
 
-  // Call with correct password but confirmed: false -> must require confirmation
-  const unconfirmedReset = await sendMcpRequest({
+  // Call with correct password -> must execute clean slate reset directly
+  const confirmedReset = await sendMcpRequest({
     jsonrpc: "2.0",
     id: 16,
     method: "tools/call",
     params: {
       name: "factory_reset",
-      arguments: { password: "Aezakmi@ff135", confirmed: false },
-    },
-  });
-  if (unconfirmedReset.result.structuredContent?.status !== "CONFIRMATION_REQUIRED") {
-    throw new Error("factory_reset without confirmed: true should return CONFIRMATION_REQUIRED!");
-  }
-  console.log("✓ factory_reset with correct password but unconfirmed correctly required confirmation");
-
-  // Call with correct password AND confirmed: true -> must execute clean slate reset
-  const confirmedReset = await sendMcpRequest({
-    jsonrpc: "2.0",
-    id: 17,
-    method: "tools/call",
-    params: {
-      name: "factory_reset",
-      arguments: { password: "Aezakmi@ff135", confirmed: true },
+      arguments: { password: "Aezakmi@ff135" },
     },
   });
   if (confirmedReset.result.structuredContent?.status !== "COMPLETED") {

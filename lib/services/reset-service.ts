@@ -36,7 +36,8 @@ export async function executeFactoryReset(params: FactoryResetParams) {
     };
   }
 
-  if (params.password !== MASTER_RESET_PASSWORD) {
+  const cleanPassword = params.password.trim();
+  if (cleanPassword !== MASTER_RESET_PASSWORD) {
     return {
       success: false,
       status: "INVALID_PASSWORD",
@@ -45,21 +46,12 @@ export async function executeFactoryReset(params: FactoryResetParams) {
     };
   }
 
-  // 2. Explicit Confirmation Verification
-  if (!params.confirmed) {
-    return {
-      success: false,
-      status: "CONFIRMATION_REQUIRED",
-      message:
-        "DESTRUCTIVE ACTION CONFIRMATION REQUIRED: Password verified. A factory reset will completely wipe all products, categories, customers, orders, shipments, payments, returns, and transactions to start with a fresh, 100% clean website (no fake data). Call factory_reset with confirmed: true and password: 'Aezakmi@ff135' to execute.",
-    };
-  }
-
+  // 2. Once the correct master password ("Aezakmi@ff135") is supplied, execute the reset immediately
   const db = await getDb();
   const workspaceId = params.workspaceId;
   const now = new Date();
 
-  // 3. Purge all transactional, catalog, and customer data in foreign-key safe order
+  // Purge all transactional, catalog, and customer data in foreign-key safe order
   await (db as any).delete(orderStatusHistory);
   await (db as any).delete(shipments);
   await (db as any).delete(returnItems);
@@ -73,7 +65,7 @@ export async function executeFactoryReset(params: FactoryResetParams) {
   await (db as any).delete(categories);
   await (db as any).delete(customers);
 
-  // 4. Log audit event
+  // Log audit event
   await logAuditEvent({
     workspaceId,
     actorId: params.actor.id,
@@ -91,7 +83,7 @@ export async function executeFactoryReset(params: FactoryResetParams) {
     success: true,
     status: "COMPLETED",
     message:
-      "FACTORY RESET COMPLETE: The website and platform have been completely reset to a clean, fresh state. All products, orders, customers, and transactions have been purged with zero fake data added.",
+      "FACTORY RESET COMPLETE: The website and platform have been completely reset to a clean, fresh state. All products, categories, customers, orders, shipments, payments, returns, and transactions have been permanently purged with zero fake data.",
     cleanSlate: true,
     timestamp: now.toISOString(),
   };

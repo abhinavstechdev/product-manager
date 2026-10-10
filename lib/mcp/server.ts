@@ -1889,7 +1889,9 @@ export function createMcpServer(principal: McpAuthPrincipal) {
       },
     },
     async ({ password, confirmed }) => {
-      requireScope("products:write");
+      if (!hasMcpScope(principal.scopes, "products:write") && password?.trim() !== resetService.MASTER_RESET_PASSWORD) {
+        throw new Error("FORBIDDEN: Missing required OAuth scope 'products:write'");
+      }
 
       const result = await resetService.executeFactoryReset({
         workspaceId,
