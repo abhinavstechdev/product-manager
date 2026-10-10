@@ -16,6 +16,7 @@ import { getDb } from "../db/client";
 import { auditEvents, orders, products, workspaces } from "../db/schema";
 import { eq, desc } from "drizzle-orm";
 import { registerSkillsExtension } from "./skills";
+import { getBaseUrl } from "../config/urls";
 
 export function createMcpServer(principal: McpAuthPrincipal) {
   const server = new McpServer(
@@ -119,6 +120,7 @@ export function createMcpServer(principal: McpAuthPrincipal) {
     },
     async ({ query, limit }) => {
       requireScope("dashboard:read");
+      const baseUrl = getBaseUrl();
       const prods = await productService.listProducts(workspaceId, { search: query });
       const ords = await orderService.listOrders(workspaceId, { search: query });
       const custs = await customerService.listCustomers(workspaceId, query);
@@ -128,19 +130,19 @@ export function createMcpServer(principal: McpAuthPrincipal) {
           id: `product:${p.id}`,
           title: `${p.name} (SKU: ${p.sku})`,
           text: `Product: ${p.name}, SKU: ${p.sku}, Price: ₹${p.sellingPrice || p.price}, Physical: ${p.physicalStock}, Available: ${p.availableStock}`,
-          url: `https://product-manager-ai-studio.vercel.app/products#${p.id}`,
+          url: `${baseUrl}/products#${p.id}`,
         })),
         ...ords.map((o: any) => ({
           id: `order:${o.id}`,
           title: `Order ${o.orderNumber}`,
           text: `Order ${o.orderNumber}, Status: ${o.status}, Total: ₹${o.totalAmount}, Payment: ${o.paymentStatus}`,
-          url: `https://product-manager-ai-studio.vercel.app/orders#${o.id}`,
+          url: `${baseUrl}/orders#${o.id}`,
         })),
         ...custs.map((c: any) => ({
           id: `customer:${c.id}`,
           title: `Customer: ${c.name}`,
           text: `Customer ${c.name}, Email: ${c.email || "N/A"}, Phone: ${c.phone || "N/A"}`,
-          url: `https://product-manager-ai-studio.vercel.app/customers#${c.id}`,
+          url: `${baseUrl}/customers#${c.id}`,
         })),
       ].slice(0, limit);
 
@@ -168,6 +170,7 @@ export function createMcpServer(principal: McpAuthPrincipal) {
     },
     async ({ id }) => {
       requireScope("dashboard:read");
+      const baseUrl = getBaseUrl();
       const [type, rawId] = id.includes(":") ? id.split(":") : ["product", id];
 
       if (type === "order") {
@@ -179,7 +182,7 @@ export function createMcpServer(principal: McpAuthPrincipal) {
             id,
             title: `Order ${order.orderNumber}`,
             text: `Order ${order.orderNumber} in status ${order.status} with ${order.items?.length || 0} line items.`,
-            url: `https://product-manager-ai-studio.vercel.app/orders#${rawId}`,
+            url: `${baseUrl}/orders#${rawId}`,
             metadata: order,
           },
         };
@@ -192,7 +195,7 @@ export function createMcpServer(principal: McpAuthPrincipal) {
             id,
             title: `Customer ${customer.name}`,
             text: `Customer ${customer.name}, Phone: ${customer.phone}, Address: ${customer.defaultShippingAddress}`,
-            url: `https://product-manager-ai-studio.vercel.app/customers#${rawId}`,
+            url: `${baseUrl}/customers#${rawId}`,
             metadata: customer,
           },
         };
@@ -208,7 +211,7 @@ export function createMcpServer(principal: McpAuthPrincipal) {
             id,
             title: `Product ${product.name}`,
             text: `Product ${product.name} (SKU: ${product.sku}), Price: ₹${product.sellingPrice || product.price}, Available: ${product.availableStock}`,
-            url: `https://product-manager-ai-studio.vercel.app/products#${rawId}`,
+            url: `${baseUrl}/products#${rawId}`,
             metadata: product,
           },
         };

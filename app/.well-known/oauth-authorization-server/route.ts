@@ -1,9 +1,9 @@
 import { NextResponse } from "next/server";
 import { ALL_MCP_SCOPES } from "@/lib/permissions/roles";
+import { getBaseUrl } from "@/lib/config/urls";
 
 export async function GET(request: Request) {
-  const url = new URL(request.url);
-  const baseUrl = process.env.APP_BASE_URL || `${url.protocol}//${url.host}`;
+  const baseUrl = getBaseUrl(request);
 
   return NextResponse.json({
     issuer: baseUrl,
