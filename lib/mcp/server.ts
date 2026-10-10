@@ -36,7 +36,7 @@ export function createMcpServer(principal: McpAuthPrincipal) {
     },
     {
       instructions:
-        "Apex Inventory & Order Management Platform. Core rules: Available stock = Physical - Reserved. Always verify product SKU using get_product or search before creating orders or adjustments. Destructive operations (delete_product, delete_order, delete_customer, delete_category, delete_payment, delete_return, factory_reset) and high-impact operations (negative stock adjustments, order cancellations) require confirmation in compliance with the ChatGPT MCP specification. Factory reset (factory_reset) requires asking the operator for the master security password ('Aezakmi@ff135') before execution. Packing slips exclude customer payment details. Delivered status does not mark order as paid. Use get_user_profile to identify operator context. For UI, follow the decoupled pattern: call data tools (get_dashboard_summary, list_products, get_order) to fetch data, then render tools (render_dashboard_widget, render_products_widget, render_order_widget) to display interactive components. For real-time updates and notifications, MCP Events (protocol version 2026-07-28) allows ChatGPT to subscribe to updates (order.created, order.status_changed, inventory.low_stock, inventory.adjusted, return.requested) via signed webhooks.",
+        "Apex Inventory & Order Management Platform. Core rules: Available stock = Physical - Reserved. Always verify product SKU using get_product or search before creating orders or adjustments. For category management: use list_categories to see available categories with product counts, get_product_category to inspect a product's current category, update_product_category to move a product to a new category (e.g. moving MAKA-SC-001 from Lip Care to Skin Care), bulk_update_product_categories for batch reassignment (defaults to dryRun: true for safety preview), suggest_product_category for intelligent category recommendations based on product name and description, and create_category_if_missing to avoid duplicate categories. Destructive operations (delete_product, delete_order, delete_customer, delete_category, delete_payment, delete_return, factory_reset) and high-impact operations (negative stock adjustments, order cancellations) require confirmation in compliance with the ChatGPT MCP specification. Factory reset (factory_reset) requires asking the operator for the master security password ('Aezakmi@ff135') before execution. Packing slips exclude customer payment details. Delivered status does not mark order as paid. Use get_user_profile to identify operator context. For UI, follow the decoupled pattern: call data tools (get_dashboard_summary, list_products, get_order) to fetch data, then render tools (render_dashboard_widget, render_products_widget, render_order_widget) to display interactive components. For real-time updates and notifications, MCP Events (protocol version 2026-07-28) allows ChatGPT to subscribe to updates (order.created, order.status_changed, inventory.low_stock, inventory.adjusted, return.requested) via signed webhooks.",
       capabilities: {
         tools: { listChanged: true },
         resources: { subscribe: false, listChanged: true },
@@ -498,35 +498,237 @@ export function createMcpServer(principal: McpAuthPrincipal) {
     }
   );
 
-  server.tool("list_categories", "List product categories", {}, async () => {
-    requireScope("products:read");
-    const cats = await productService.listCategories(workspaceId);
-    return { content: [{ type: "text", text: JSON.stringify(cats, null, 2) }] };
-  });
-
-  server.tool(
-    "create_category",
-    "Create a product category",
-    { name: z.string().min(2), description: z.string().optional() },
-    async (args) => {
-      requireScope("products:write");
-      const cat = await productService.createCategory({ ...args, workspaceId });
-      return { content: [{ type: "text", text: JSON.stringify(cat, null, 2) }] };
+  server.registerTool(
+    "list_categories",
+    {
+      title: "List Categories",
+      description: "List all product categories in the workspace, including product counts, descriptions, and active status.",
+      inputSchema: {
+        activeOnly: z.boolean().optional().default(false).describe("If true, filters to only active categories"),
+      },
+      annotations: {
+        readOnlyHint: true,
+        destructiveHint: false,
+        openWorldHint: false,
+      },
+    },
+    async ({ activeOnly }) => {
+      requireScope("products:read");
+      const cats = await productService.listCategories(workspaceId, { activeOnly });
+      return {
+        content: [{ type: "text", text: JSON.stringify(cats, null, 2) }],
+        structuredContent: { categories: cats },
+      };
     }
   );
 
-  server.tool(
-    "update_category",
-    "Update an existing category",
-    { categoryId: z.string(), name: z.string() },
-    async ({ categoryId, name }) => {
+  server.registerTool(
+    "create_category",
+    {
+      title: "Create Category",
+      description: "Create a new product category in the workspace. Prevents duplicate category names.",
+      inputSchema: {
+        name: z.string().min(2).describe("Category name (e.g. 'Skin Care', 'Hair Care')"),
+        description: z.string().optional().describe("Description of what belongs in this category"),
+      },
+      annotations: {
+        readOnlyHint: false,
+        destructiveHint: false,
+        openWorldHint: false,
+      },
+    },
+    async (args) => {
       requireScope("products:write");
-      const db = await getDb();
-      await (db as any)
-        .update(products)
-        .set({ updatedAt: new Date() })
-        .where(eq(products.id, categoryId));
-      return { content: [{ type: "text", text: JSON.stringify({ success: true, categoryId, name }, null, 2) }] };
+      const cat = await productService.createCategory({ ...args, workspaceId });
+      return {
+        content: [{ type: "text", text: JSON.stringify(cat, null, 2) }],
+        structuredContent: cat,
+      };
+    }
+  );
+
+  server.registerTool(
+    "create_category_if_missing",
+    {
+      title: "Create Category If Missing",
+      description: "Idempotently create a product category if one with the same normalized name does not already exist. Prevents accidental duplicate categories.",
+      inputSchema: {
+        name: z.string().min(2).describe("Category name (e.g. 'Eye Care', 'Skin Care')"),
+        description: z.string().optional().describe("Category description"),
+      },
+      annotations: {
+        readOnlyHint: false,
+        destructiveHint: false,
+        openWorldHint: false,
+      },
+    },
+    async ({ name, description }) => {
+      requireScope("products:write");
+      const result = await productService.createCategoryIfMissing({
+        workspaceId,
+        name,
+        description,
+        actor,
+      });
+      return {
+        content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
+        structuredContent: result,
+      };
+    }
+  );
+
+  server.registerTool(
+    "update_category",
+    {
+      title: "Update Category",
+      description: "Update an existing category's name, description, or active status.",
+      inputSchema: {
+        categoryId: z.string().describe("The category ID to update (e.g. cat_...)"),
+        name: z.string().min(2).optional().describe("New category name"),
+        description: z.string().optional().describe("New description"),
+        isActive: z.boolean().optional().describe("Active status flag"),
+      },
+      annotations: {
+        readOnlyHint: false,
+        destructiveHint: false,
+        openWorldHint: false,
+      },
+    },
+    async ({ categoryId, name, description, isActive }) => {
+      requireScope("products:write");
+      const result = await productService.updateCategory({
+        workspaceId,
+        categoryId,
+        name,
+        description,
+        isActive,
+        actor,
+      });
+      return {
+        content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
+        structuredContent: result,
+      };
+    }
+  );
+
+  server.registerTool(
+    "get_product_category",
+    {
+      title: "Get Product Category",
+      description: "Retrieve a product's current category details (name, ID, active status) by product ID or SKU. Clarifies if product is uncategorized.",
+      inputSchema: {
+        productIdOrSku: z.string().describe("Product ID (e.g. prd_...) or SKU (e.g. MAKA-SC-001)"),
+      },
+      annotations: {
+        readOnlyHint: true,
+        destructiveHint: false,
+        openWorldHint: false,
+      },
+    },
+    async ({ productIdOrSku }) => {
+      requireScope("products:read");
+      const result = await productService.getProductCategory({
+        workspaceId,
+        productIdOrSku,
+      });
+      return {
+        content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
+        structuredContent: result,
+      };
+    }
+  );
+
+  server.registerTool(
+    "update_product_category",
+    {
+      title: "Update Product Category",
+      description: "Assign an existing product to an existing category by product ID or SKU. Preserves all other product attributes, prices, stock, and barcodes.",
+      inputSchema: {
+        productIdOrSku: z.string().describe("The product ID (e.g. prd_...) or SKU (e.g. MAKA-SC-001)"),
+        categoryId: z.string().describe("The target category ID (e.g. cat_...) to assign"),
+      },
+      annotations: {
+        readOnlyHint: false,
+        destructiveHint: false,
+        openWorldHint: false,
+      },
+    },
+    async ({ productIdOrSku, categoryId }) => {
+      requireScope("products:write");
+      const result = await productService.updateProductCategory({
+        workspaceId,
+        productIdOrSku,
+        categoryId,
+        actor,
+      });
+      return {
+        content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
+        structuredContent: result,
+      };
+    }
+  );
+
+  server.registerTool(
+    "bulk_update_product_categories",
+    {
+      title: "Bulk Update Product Categories",
+      description: "Assign categories to multiple products in a single operation. Defaults to dry-run mode (dryRun: true) to preview valid and invalid assignments before applying changes.",
+      inputSchema: {
+        items: z.array(
+          z.object({
+            productIdOrSku: z.string().describe("Product ID or SKU"),
+            categoryId: z.string().describe("Target category ID"),
+          })
+        ).min(1).describe("List of product and category assignments to process"),
+        dryRun: z.boolean().optional().default(true).describe("If true (default), validates all assignments without writing changes. Set false to execute updates."),
+      },
+      annotations: {
+        readOnlyHint: false,
+        destructiveHint: false,
+        openWorldHint: false,
+      },
+    },
+    async ({ items, dryRun }) => {
+      requireScope("products:write");
+      const result = await productService.bulkUpdateProductCategories({
+        workspaceId,
+        items,
+        dryRun,
+        actor,
+      });
+      return {
+        content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
+        structuredContent: result,
+      };
+    }
+  );
+
+  server.registerTool(
+    "suggest_product_category",
+    {
+      title: "Suggest Product Category",
+      description: "Recommend a suitable existing category for a product based on its name, description, and catalog taxonomy. Does not modify the product. If no match is found, recommends creating a new category.",
+      inputSchema: {
+        productIdOrSku: z.string().optional().describe("Product ID or SKU to inspect"),
+        name: z.string().optional().describe("Product name to evaluate if not using existing product"),
+        description: z.string().optional().describe("Product description to evaluate"),
+      },
+      annotations: {
+        readOnlyHint: true,
+        destructiveHint: false,
+        openWorldHint: false,
+      },
+    },
+    async (args) => {
+      requireScope("products:read");
+      const result = await productService.suggestProductCategory({
+        workspaceId,
+        ...args,
+      });
+      return {
+        content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
+        structuredContent: result,
+      };
     }
   );
 
@@ -1907,9 +2109,18 @@ export function createMcpServer(principal: McpAuthPrincipal) {
     {
       title: "Delete Category",
       description:
-        "Delete a product category. Any products assigned to this category will be preserved with category set to null. Destructive action requiring explicit confirmation.",
+        "Delete a product category. Requires an explicit productPolicy ('UNASSIGN', 'REASSIGN', or 'REJECT') to ensure products are never accidentally deleted or mismanaged. Destructive action requiring confirmation.",
       inputSchema: {
         categoryId: z.string().describe("The category ID (e.g. cat_...) to delete"),
+        productPolicy: z
+          .enum(["UNASSIGN", "REASSIGN", "REJECT"])
+          .optional()
+          .default("UNASSIGN")
+          .describe("Policy for products assigned to this category: 'UNASSIGN' to leave them uncategorized, 'REASSIGN' to move them to reassignCategoryId, or 'REJECT' to abort if products exist."),
+        reassignCategoryId: z
+          .string()
+          .optional()
+          .describe("Target category ID when productPolicy is 'REASSIGN'"),
         confirmed: z.boolean().optional().default(false).describe("Explicit confirmation flag to execute deletion"),
         confirmationToken: z.string().optional().describe("Confirmation token if pre-authorized via confirmation flow"),
       },
@@ -1919,22 +2130,22 @@ export function createMcpServer(principal: McpAuthPrincipal) {
         destructiveHint: true,
       },
     },
-    async ({ categoryId, confirmed, confirmationToken }) => {
+    async ({ categoryId, productPolicy, reassignCategoryId, confirmed, confirmationToken }) => {
       requireScope("products:write");
       if (!confirmed && !confirmationToken) {
         const conf = await confirmationService.createPendingConfirmation({
           workspaceId,
           clientId: principal.clientId,
           toolName: "delete_category",
-          parameters: { categoryId },
+          parameters: { categoryId, productPolicy, reassignCategoryId },
           riskLevel: "HIGH",
-          description: `Delete category "${categoryId}" and unlink associated products.`,
+          description: `Delete category "${categoryId}" with productPolicy: "${productPolicy || 'UNASSIGN'}".`,
         });
         return {
           content: [
             {
               type: "text",
-              text: `DESTRUCTIVE ACTION CONFIRMATION REQUIRED:\nDeleting category "${categoryId}". Associated products will be unlinked. To proceed, call delete_category with confirmed: true or confirmationToken: "${conf.confirmationToken}".`,
+              text: `DESTRUCTIVE ACTION CONFIRMATION REQUIRED:\nDeleting category "${categoryId}" (productPolicy: ${productPolicy || 'UNASSIGN'}). To proceed, call delete_category with confirmed: true or confirmationToken: "${conf.confirmationToken}".`,
             },
           ],
           structuredContent: conf,
@@ -1948,6 +2159,8 @@ export function createMcpServer(principal: McpAuthPrincipal) {
       const result = await productService.deleteCategory({
         workspaceId,
         categoryId,
+        productPolicy,
+        reassignCategoryId,
         actor,
       });
 
@@ -1955,7 +2168,7 @@ export function createMcpServer(principal: McpAuthPrincipal) {
         content: [
           {
             type: "text",
-            text: `Category ${result.name} (ID: ${result.deletedId}) was deleted and its products were unlinked.`,
+            text: `Category ${result.name} (ID: ${result.deletedId}) was deleted successfully. Policy: ${result.productPolicy}, products affected: ${result.productsAffected}.${result.warning ? ` Warning: ${result.warning}` : ''}`,
           },
         ],
         structuredContent: result,

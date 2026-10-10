@@ -187,11 +187,11 @@ export async function reserveStockForOrder(params: {
       prevQty: prevReserved,
       newQty: newReserved,
       transactionType: "STOCK_RESERVED",
-      reason: `Reserved for order ${params.orderNumber}`,
+      reason: `Reserved for order ${params.orderNumber || params.orderId}`,
       orderId: params.orderId,
-      actorId: params.actor.id,
-      actorName: params.actor.name,
-      actorType: params.actor.type,
+      actorId: params.actor?.id || "system",
+      actorName: params.actor?.name || "System Automated",
+      actorType: params.actor?.type || "SYSTEM",
       createdAt: new Date(),
     });
   }
