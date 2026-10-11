@@ -9,6 +9,8 @@ const JWT_SECRET = new TextEncoder().encode(
 const PUBLIC_PREFIXES = [
   "/login",
   "/oauth/consent",
+  "/bill",
+  "/api/bill",
   "/api/auth",
   "/api/health",
   "/api/mcp",

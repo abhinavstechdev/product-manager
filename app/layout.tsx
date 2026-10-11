@@ -19,6 +19,8 @@ export const metadata: Metadata = {
     "Unified multi-tenant Inventory, Product, Customer, and Manual Order Management platform with remote Model Context Protocol (MCP) server integration.",
 };
 
+import { Suspense } from "react";
+
 export default function RootLayout({
   children,
 }: {
@@ -30,7 +32,9 @@ export default function RootLayout({
       className={`${geistSans.variable} ${geistMono.variable} dark h-full antialiased`}
     >
       <body className="min-h-full bg-slate-950 text-slate-100 antialiased overflow-hidden">
-        <DashboardShell>{children}</DashboardShell>
+        <Suspense fallback={<div className="min-h-screen bg-slate-950 text-slate-100" />}>
+          <DashboardShell>{children}</DashboardShell>
+        </Suspense>
       </body>
     </html>
   );

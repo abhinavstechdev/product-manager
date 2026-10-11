@@ -10,8 +10,8 @@ export function DashboardShell({ children }: { children: React.ReactNode }) {
   const [isOrderModalOpen, setIsOrderModalOpen] = useState(false);
   const pathname = usePathname();
 
-  // If on login or OAuth consent screens, render clean standalone view
-  if (pathname?.startsWith("/login") || pathname?.startsWith("/oauth")) {
+  // If on login, OAuth consent, or digital bill screens, render clean standalone view
+  if (pathname?.startsWith("/login") || pathname?.startsWith("/oauth") || pathname?.startsWith("/bill")) {
     return <main className="min-h-screen w-screen bg-slate-950 text-slate-100">{children}</main>;
   }
 

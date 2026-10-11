@@ -13,12 +13,18 @@ import {
   Clock,
   Eye,
   X,
+  Receipt,
+  Printer,
+  Copy,
+  Check,
+  ExternalLink,
 } from "lucide-react";
 import { StatusBadge } from "@/components/StatusBadge";
 import { OrderCreateModal } from "@/components/OrderCreateModal";
 import { PackingSlipModal } from "@/components/PackingSlipModal";
 import { ShipOrderModal } from "@/components/ShipOrderModal";
 import { PaymentRecordModal } from "@/components/PaymentRecordModal";
+import { formatDateTimeIST, formatDateIST } from "@/lib/utils/format";
 
 export default function OrdersPage() {
   const [orders, setOrders] = useState<any[]>([]);
@@ -26,6 +32,7 @@ export default function OrdersPage() {
   const [paymentFilter, setPaymentFilter] = useState("");
   const [search, setSearch] = useState("");
   const [loading, setLoading] = useState(true);
+  const [copiedBillId, setCopiedBillId] = useState<string | null>(null);
 
   // Modals state
   const [isCreateOpen, setIsCreateOpen] = useState(false);
@@ -175,10 +182,13 @@ export default function OrdersPage() {
                     <td className="py-3 px-4 font-mono font-bold text-indigo-400">
                       <button
                         onClick={() => handleOpenDetail(ord.id)}
-                        className="hover:underline text-left cursor-pointer"
+                        className="hover:underline text-left cursor-pointer block"
                       >
                         {ord.orderNumber}
                       </button>
+                      <div className="text-[10px] text-slate-500 font-sans font-normal mt-0.5">
+                        {formatDateTimeIST(ord.createdAt)}
+                      </div>
                     </td>
                     <td className="py-3 px-4 text-slate-200">
                       <div className="font-medium">{ord.customerName || "Customer"}</div>
@@ -204,6 +214,17 @@ export default function OrdersPage() {
                     </td>
                     <td className="py-3 px-4 text-center">
                       <div className="flex items-center justify-center gap-1.5">
+                        {/* Digital Tax Invoice & Bill */}
+                        <a
+                          href={`/bill/${ord.id}`}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          title="View Digital Bill & Print Tax Invoice"
+                          className="p-1.5 rounded-lg bg-indigo-600/20 hover:bg-indigo-600/30 text-indigo-300 border border-indigo-500/30 transition flex items-center gap-1"
+                        >
+                          <Receipt className="w-3.5 h-3.5" />
+                        </a>
+
                         {/* View details */}
                         <button
                           onClick={() => handleOpenDetail(ord.id)}
@@ -325,6 +346,65 @@ export default function OrdersPage() {
                 </div>
               </div>
 
+              {/* Digital Tax Invoice & Bill Actions Panel */}
+              <div className="p-3.5 bg-gradient-to-r from-indigo-950/40 via-slate-950 to-indigo-950/40 rounded-xl border border-indigo-500/30 flex flex-wrap items-center justify-between gap-3">
+                <div className="flex items-center gap-2.5">
+                  <Receipt className="w-5 h-5 text-indigo-400 shrink-0" />
+                  <div>
+                    <div className="text-white font-bold text-xs flex items-center gap-1.5">
+                      <span>Digital Bill &amp; Tax Invoice</span>
+                      <span className="text-[9px] bg-indigo-500/20 text-indigo-300 font-mono px-1.5 py-0.5 rounded">
+                        IST Verified
+                      </span>
+                    </div>
+                    <div className="text-[10px] text-slate-400">
+                      Placed: {formatDateTimeIST(viewOrderDetail.createdAt)}
+                    </div>
+                  </div>
+                </div>
+
+                <div className="flex flex-wrap items-center gap-2">
+                  <a
+                    href={`/bill/${viewOrderDetail.id}`}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-semibold shadow transition"
+                  >
+                    <Eye className="w-3.5 h-3.5" />
+                    <span>View Digital Bill</span>
+                  </a>
+
+                  <a
+                    href={`/bill/${viewOrderDetail.id}?print=true`}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 text-xs font-semibold transition"
+                  >
+                    <Printer className="w-3.5 h-3.5" />
+                    <span>Print Invoice</span>
+                  </a>
+
+                  <button
+                    onClick={() => {
+                      if (typeof window !== "undefined") {
+                        const url = `${window.location.origin}/bill/${viewOrderDetail.id}`;
+                        navigator.clipboard.writeText(url);
+                        setCopiedBillId(viewOrderDetail.id);
+                        setTimeout(() => setCopiedBillId(null), 2000);
+                      }
+                    }}
+                    className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 text-xs font-semibold transition cursor-pointer"
+                  >
+                    {copiedBillId === viewOrderDetail.id ? (
+                      <Check className="w-3.5 h-3.5 text-emerald-400" />
+                    ) : (
+                      <Copy className="w-3.5 h-3.5" />
+                    )}
+                    <span>{copiedBillId === viewOrderDetail.id ? "Copied!" : "Copy URL"}</span>
+                  </button>
+                </div>
+              </div>
+
               {/* Customer & Shipping */}
               <div className="grid grid-cols-2 gap-4">
                 <div className="p-3 bg-slate-950 rounded-xl border border-slate-800">
@@ -391,7 +471,7 @@ export default function OrdersPage() {
                           <span className="text-slate-400">— {h.note || "Status updated"}</span>
                         </div>
                         <div className="text-slate-400 font-mono">
-                          {h.actorName} ({h.source}) • {new Date(h.createdAt).toLocaleTimeString()}
+                          {h.actorName} ({h.source}) • {formatDateTimeIST(h.createdAt)}
                         </div>
                       </div>
                     ))}

@@ -17,6 +17,7 @@ import {
   Bot,
   Plug,
   Sparkles,
+  Settings,
 } from "lucide-react";
 
 const navigationItems = [
@@ -30,6 +31,7 @@ const navigationItems = [
   { name: "Payments", href: "/payments", icon: CreditCard },
   { name: "Returns & QC", href: "/returns", icon: RotateCcw },
   { name: "Reports & Analytics", href: "/reports", icon: BarChart3 },
+  { name: "Company & Bill Settings", href: "/settings", icon: Settings },
   { name: "AI Activity & Approvals", href: "/ai-activity", icon: Bot, badge: "AI" },
   { name: "ChatGPT MCP Guide", href: "/chatgpt-mcp", icon: Bot },
   { name: "Google Gemini MCP Guide", href: "/gemini-mcp", icon: Sparkles, badge: "NEW", highlight: true },

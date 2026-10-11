@@ -154,6 +154,28 @@ export async function ensureSchemaAndSeed(database: AppDatabase) {
       `);
     } catch {}
 
+    // Ensure company settings and timezone columns exist on workspaces table
+    const workspaceColumns = [
+      "ALTER TABLE workspaces ADD COLUMN IF NOT EXISTS company_name text",
+      "ALTER TABLE workspaces ADD COLUMN IF NOT EXISTS company_address text",
+      "ALTER TABLE workspaces ADD COLUMN IF NOT EXISTS company_phone text",
+      "ALTER TABLE workspaces ADD COLUMN IF NOT EXISTS company_email text",
+      "ALTER TABLE workspaces ADD COLUMN IF NOT EXISTS company_tax_id text",
+      "ALTER TABLE workspaces ADD COLUMN IF NOT EXISTS company_logo_url text",
+      "ALTER TABLE workspaces ADD COLUMN IF NOT EXISTS company_website text",
+      "ALTER TABLE workspaces ADD COLUMN IF NOT EXISTS invoice_prefix text DEFAULT 'INV'",
+      "ALTER TABLE workspaces ADD COLUMN IF NOT EXISTS invoice_footer_notes text",
+      "ALTER TABLE workspaces ADD COLUMN IF NOT EXISTS timezone text DEFAULT 'Asia/Kolkata'",
+    ];
+
+    for (const colQuery of workspaceColumns) {
+      try {
+        await (database as any).execute(sql.raw(colQuery));
+      } catch (colErr) {
+        // Safe to ignore if column already exists
+      }
+    }
+
     // Now seed default workspace and initial data if empty
     await seedInitialData(database);
 

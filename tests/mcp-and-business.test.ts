@@ -734,6 +734,95 @@ async function runTests() {
   }
   console.log("✓ Verified Google Gemini provider validation & zero-conflict isolation check passed");
 
+  // 16. Test Bill Generation (Print & Digital URL) and Company Settings (India Timezone)
+  console.log("\n--- Testing Bill Generation (Print & Digital URL) & Company Settings ---");
+  const { formatDateTimeIST, amountToWordsINR } = await import("../lib/utils/format");
+  
+  // Test IST Date Formatter
+  const testDate = new Date("2026-10-11T09:08:00Z");
+  const istFormatted = formatDateTimeIST(testDate);
+  if (!istFormatted.includes("IST")) {
+    throw new Error("IST Date Formatter failed to include IST indicator!");
+  }
+  console.log("✓ Verified Indian Timezone IST date formatting:", istFormatted);
+
+  // Test Indian Currency Words
+  const words400 = amountToWordsINR(400);
+  if (!words400.includes("Rupees Four Hundred Only")) {
+    throw new Error(`Amount in words expected 'Rupees Four Hundred Only', got: ${words400}`);
+  }
+  const wordsComplex = amountToWordsINR(125000);
+  if (!wordsComplex.includes("Lakh")) {
+    throw new Error(`Amount in words for 1,25,000 should use Indian Lakh system, got: ${wordsComplex}`);
+  }
+  console.log("✓ Verified Indian Numbering System amount-to-words:", wordsComplex);
+
+  // Test Settings API
+  const { GET: getSettings, POST: updateSettings } = await import("../app/api/settings/route");
+  const settingsReq = new Request("http://localhost:3000/api/settings") as any;
+  const settingsRes = await getSettings(settingsReq);
+  const settingsData = await settingsRes.json();
+  if (!settingsData.success || !settingsData.settings.timezone) {
+    throw new Error("Failed to retrieve company settings!");
+  }
+  if (settingsData.settings.timezone !== "Asia/Kolkata") {
+    throw new Error(`Default timezone should be Asia/Kolkata, got: ${settingsData.settings.timezone}`);
+  }
+  console.log("✓ Verified default company settings (Timezone: Asia/Kolkata, Currency: INR):", settingsData.settings.companyName);
+
+  // Test Update Settings
+  const updateSettingsReq = new Request("http://localhost:3000/api/settings", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      companyName: "Apex Logistics India Pvt Ltd",
+      companyPhone: "+91 99887 76655",
+      companyAddress: "Plot 100, Electronic City, Bengaluru - 560100",
+      companyTaxId: "GSTIN: 29AAAAA0000A1Z5",
+    }),
+  }) as any;
+  const updateSettingsRes = await updateSettings(updateSettingsReq);
+  const updateSettingsData = await updateSettingsRes.json();
+  if (!updateSettingsData.success) {
+    throw new Error("Failed to update company settings!");
+  }
+  console.log("✓ Successfully updated company profile, contact details, and tax ID");
+
+  // Test Bill Generation Endpoint
+  const { GET: getBill } = await import("../app/api/bill/[id]/route");
+  const billTestOrder = await orderService.createOrder({
+    workspaceId: principal.workspaceId,
+    newCustomer: { name: "Ananya Sharma", phone: "+91 98765 00000" },
+    shippingAddress: "Indiranagar, Bengaluru, Karnataka - 560038",
+    source: "WhatsApp",
+    items: [{ productId: dynamicTestProd.id, quantity: 2, unitPrice: 200 }],
+    actor: { id: "test_suite", name: "Automated Runner", type: "AI_AGENT" },
+    sourceType: "web",
+  });
+
+  const billReq = new Request(`http://localhost:3000/api/bill/${billTestOrder.orderId}`) as any;
+  const billRes = await getBill(billReq, { params: Promise.resolve({ id: billTestOrder.orderId }) });
+  const billData = await billRes.json();
+
+  if (!billData.success || !billData.invoiceNumber || !billData.digitalBillUrl) {
+    console.error("billData failed response:", billData);
+    throw new Error("Failed to generate digital tax bill!");
+  }
+  if (!billData.amountInWords.includes("Rupees Four Hundred Only")) {
+    throw new Error(`Bill amount in words incorrect: ${billData.amountInWords}`);
+  }
+  if (billData.company.timezone !== "Asia/Kolkata") {
+    throw new Error("Bill company timezone should be Asia/Kolkata!");
+  }
+  console.log("✓ Verified generated Tax Invoice & Digital Bill:", {
+    invoiceNumber: billData.invoiceNumber,
+    digitalBillUrl: billData.digitalBillUrl,
+    customer: billData.customer.name,
+    total: billData.order.totalAmount,
+    amountInWords: billData.amountInWords,
+    company: billData.company.name,
+  });
+
   console.log("\n=======================================================");
   console.log("ALL PLATFORM AND MCP VERIFICATION TESTS PASSED CLEANLY!");
   console.log("=======================================================\n");
