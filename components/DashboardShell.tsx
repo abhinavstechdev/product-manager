@@ -1,12 +1,19 @@
 "use client";
 
 import React, { useState } from "react";
+import { usePathname } from "next/navigation";
 import { Sidebar } from "./Sidebar";
 import { Header } from "./Header";
 import { OrderCreateModal } from "./OrderCreateModal";
 
 export function DashboardShell({ children }: { children: React.ReactNode }) {
   const [isOrderModalOpen, setIsOrderModalOpen] = useState(false);
+  const pathname = usePathname();
+
+  // If on login or OAuth consent screens, render clean standalone view
+  if (pathname?.startsWith("/login") || pathname?.startsWith("/oauth")) {
+    return <main className="min-h-screen w-screen bg-slate-950 text-slate-100">{children}</main>;
+  }
 
   return (
     <div className="flex h-screen w-screen overflow-hidden bg-slate-950 text-slate-100 font-sans">

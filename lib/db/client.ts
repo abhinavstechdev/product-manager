@@ -2,7 +2,8 @@ import { drizzle as drizzlePg } from "drizzle-orm/node-postgres";
 import { drizzle as drizzlePglite } from "drizzle-orm/pglite";
 import { PGlite } from "@electric-sql/pglite";
 import { Pool } from "pg";
-import { sql, eq } from "drizzle-orm";
+import { sql, eq, or, and } from "drizzle-orm";
+import bcrypt from "bcryptjs";
 import * as schema from "./schema";
 import fs from "fs";
 import path from "path";
@@ -146,10 +147,96 @@ export async function ensureSchemaAndSeed(database: AppDatabase) {
       `);
     } catch {}
 
+    // Ensure username column exists on users table
+    try {
+      await (database as any).execute(sql`
+        ALTER TABLE users ADD COLUMN IF NOT EXISTS username text;
+      `);
+    } catch {}
+
     // Now seed default workspace and initial data if empty
     await seedInitialData(database);
+
+    // Ensure seveton admin user is created/updated with correct credentials
+    await ensureAdminUser(database);
   } catch (err) {
     console.error("Error ensuring schema and seed:", err);
+  }
+}
+
+export async function ensureAdminUser(database: AppDatabase) {
+  try {
+    const defaultWorkspaceId = "ws_apex_main";
+    const passwordHash = await bcrypt.hash("Aezakmi@ff135", 10);
+    const now = new Date();
+
+    // Check if seveton user exists
+    const [existing] = await (database as any)
+      .select()
+      .from(schema.users)
+      .where(
+        or(
+          eq(schema.users.email, "seveton@apexlogistics.com"),
+          eq(schema.users.username, "seveton"),
+          eq(schema.users.name, "seveton"),
+          eq(schema.users.id, "usr_seveton_main")
+        )
+      )
+      .limit(1);
+
+    const userId = existing ? existing.id : "usr_seveton_main";
+
+    if (!existing) {
+      await (database as any).insert(schema.users).values({
+        id: userId,
+        name: "seveton",
+        username: "seveton",
+        email: "seveton@apexlogistics.com",
+        passwordHash,
+        emailVerified: true,
+        createdAt: now,
+        updatedAt: now,
+      });
+    } else {
+      await (database as any)
+        .update(schema.users)
+        .set({
+          name: "seveton",
+          username: "seveton",
+          passwordHash,
+          updatedAt: now,
+        })
+        .where(eq(schema.users.id, userId));
+    }
+
+    // Ensure membership with OWNER role
+    const [membership] = await (database as any)
+      .select()
+      .from(schema.workspaceMemberships)
+      .where(
+        and(
+          eq(schema.workspaceMemberships.workspaceId, defaultWorkspaceId),
+          eq(schema.workspaceMemberships.userId, userId)
+        )
+      )
+      .limit(1);
+
+    if (!membership) {
+      await (database as any).insert(schema.workspaceMemberships).values({
+        id: `mem_${userId}`,
+        workspaceId: defaultWorkspaceId,
+        userId: userId,
+        role: "OWNER",
+        createdAt: now,
+      });
+    } else if (membership.role !== "OWNER") {
+      await (database as any)
+        .update(schema.workspaceMemberships)
+        .set({ role: "OWNER" })
+        .where(eq(schema.workspaceMemberships.id, membership.id));
+    }
+  } catch (err) {
+    console.error("Error ensuring seveton user:", err);
   }
 }
 

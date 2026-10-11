@@ -14,6 +14,7 @@ export interface SessionPayload {
   userId: string;
   email: string;
   name: string;
+  username?: string;
   workspaceId: string;
   role: UserRole;
   workspaceName: string;
@@ -27,11 +28,14 @@ export async function verifyPassword(password: string, hash: string): Promise<bo
   return await bcrypt.compare(password, hash);
 }
 
-export async function createSessionToken(payload: SessionPayload): Promise<string> {
+export async function createSessionToken(
+  payload: SessionPayload,
+  rememberMe: boolean = false
+): Promise<string> {
   return await new SignJWT(payload as any)
     .setProtectedHeader({ alg: "HS256" })
     .setIssuedAt()
-    .setExpirationTime("7d")
+    .setExpirationTime(rememberMe ? "30d" : "1d")
     .sign(JWT_SECRET);
 }
 
@@ -44,22 +48,43 @@ export async function verifySessionToken(token: string): Promise<SessionPayload 
   }
 }
 
-export async function getSession(): Promise<SessionPayload> {
-  const cookieStore = await cookies();
-  const token = cookieStore.get("apex_session")?.value;
+export async function getOptionalSession(): Promise<SessionPayload | null> {
+  try {
+    const cookieStore = await cookies();
+    const token = cookieStore.get("apex_session")?.value;
 
-  if (token) {
-    const verified = await verifySessionToken(token);
-    if (verified) return verified;
+    if (token) {
+      const verified = await verifySessionToken(token);
+      if (verified) return verified;
+    }
+  } catch {
+    // cookies() can throw in non-request contexts
   }
 
-  // Seamless fallback to seeded workspace owner for frictionless local dev and immediate usability
-  return {
-    userId: "usr_owner_main",
-    email: "owner@apexlogistics.com",
-    name: "Rohan Sharma (Store Owner)",
-    workspaceId: "ws_apex_main",
-    workspaceName: "Apex Logistics & Retail",
-    role: "OWNER",
-  };
+  // Automatic test runner fallback (e.g. running tsx tests)
+  if (process.env.NODE_ENV === "test" || process.env.TEST_SUITE === "true") {
+    return {
+      userId: "usr_seveton_main",
+      email: "seveton@apexlogistics.com",
+      name: "seveton",
+      username: "seveton",
+      workspaceId: "ws_apex_main",
+      workspaceName: "Apex Logistics & Retail",
+      role: "OWNER",
+    };
+  }
+
+  return null;
+}
+
+export async function getSession(): Promise<SessionPayload> {
+  const session = await getOptionalSession();
+  if (!session) {
+    throw new Error("Unauthorized: Active user session required");
+  }
+  return session;
+}
+
+export async function requireSession(): Promise<SessionPayload> {
+  return await getSession();
 }

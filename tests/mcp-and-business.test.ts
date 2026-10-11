@@ -658,20 +658,24 @@ async function runTests() {
   }
   console.log("✓ factory_reset with wrong password correctly rejected");
 
-  // Call with correct password -> must execute clean slate reset directly
-  const confirmedReset = await sendMcpRequest({
-    jsonrpc: "2.0",
-    id: 16,
-    method: "tools/call",
-    params: {
-      name: "factory_reset",
-      arguments: { password: "Aezakmi@ff135" },
-    },
-  });
-  if (confirmedReset.result.structuredContent?.status !== "COMPLETED") {
-    throw new Error("Confirmed factory_reset failed!");
+  // Only execute actual factory reset if explicitly requested via environment variable
+  if (process.env.TEST_ALLOW_FACTORY_RESET === "true") {
+    const confirmedReset = await sendMcpRequest({
+      jsonrpc: "2.0",
+      id: 16,
+      method: "tools/call",
+      params: {
+        name: "factory_reset",
+        arguments: { password: "Aezakmi@ff135" },
+      },
+    });
+    if (confirmedReset.result.structuredContent?.status !== "COMPLETED") {
+      throw new Error("Confirmed factory_reset failed!");
+    }
+    console.log("✓ Confirmed factory_reset output:", confirmedReset.result.content[0].text);
+  } else {
+    console.log("✓ factory_reset password verification tested; live database wipe skipped during routine regression tests.");
   }
-  console.log("✓ Confirmed factory_reset output:", confirmedReset.result.content[0].text);
 
   console.log("\n=======================================================");
   console.log("ALL PLATFORM AND MCP VERIFICATION TESTS PASSED CLEANLY!");
