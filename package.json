@@ -7,7 +7,7 @@
     "build": "node ./scripts/migrate-on-build.mjs && next build",
     "start": "next start",
     "lint": "eslint",
-    "test": "tsx --env-file=.env tests/mcp-and-business.test.ts",
+    "test": "tsx tests/mcp-and-business.test.ts",
     "db:push": "drizzle-kit push --force"
   },
   "dependencies": {

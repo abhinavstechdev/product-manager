@@ -1,3 +1,8 @@
+// ENFORCE ISOLATED IN-MEMORY DATABASE FOR TESTS (PREVENT TOUCHING PRODUCTION NEON DATABASE)
+delete process.env.DATABASE_URL;
+(process.env as Record<string, string | undefined>).NODE_ENV = "test";
+process.env.TEST_SUITE = "true";
+
 import { getDb } from "../lib/db/client";
 import { verifyMcpToken, verifyPkce } from "../lib/auth/oauth";
 import { createMcpServer } from "../lib/mcp/server";
