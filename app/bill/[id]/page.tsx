@@ -113,7 +113,7 @@ function BillContent() {
   const { order, customer, items, company, invoiceNumber, amountInWords } = billData;
 
   return (
-    <div className="min-h-screen bg-slate-950 text-slate-900 pb-16 print:bg-white print:p-0 print:pb-0">
+    <div className="min-h-screen w-full bg-slate-950 text-slate-900 pb-16 print:overflow-visible print:bg-white print:p-0 print:pb-0">
       {/* Action Bar (Hidden in Print) */}
       <div className="print:hidden sticky top-0 z-50 bg-slate-900/95 backdrop-blur-md border-b border-slate-800 px-3 sm:px-4 py-3">
         <div className="max-w-4xl mx-auto flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3">

@@ -31,7 +31,7 @@ export default function RootLayout({
       lang="en"
       className={`${geistSans.variable} ${geistMono.variable} dark h-full antialiased`}
     >
-      <body className="min-h-full bg-slate-950 text-slate-100 antialiased overflow-hidden">
+      <body className="min-h-full bg-slate-950 text-slate-100 antialiased">
         <Suspense fallback={<div className="min-h-screen bg-slate-950 text-slate-100" />}>
           <DashboardShell>{children}</DashboardShell>
         </Suspense>

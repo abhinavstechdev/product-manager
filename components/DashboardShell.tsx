@@ -13,7 +13,7 @@ export function DashboardShell({ children }: { children: React.ReactNode }) {
 
   // If on login, OAuth consent, or digital bill screens, render clean standalone view
   if (pathname?.startsWith("/login") || pathname?.startsWith("/oauth") || pathname?.startsWith("/bill")) {
-    return <main className="min-h-screen w-full bg-slate-950 text-slate-100">{children}</main>;
+    return <main className="min-h-screen w-full bg-slate-950 text-slate-100 print:overflow-visible">{children}</main>;
   }
 
   return (
