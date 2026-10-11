@@ -793,9 +793,12 @@ asyncio.run(main())`;
               className="w-full px-3.5 py-2.5 rounded-xl bg-slate-950 border border-slate-800 text-white text-xs font-mono focus:outline-none focus:border-indigo-500 transition cursor-pointer"
             >
               <option value="get_dashboard_summary">get_dashboard_summary (Business Aggregates)</option>
+              <option value="get_company_settings">get_company_settings (Store Profile &amp; Settings)</option>
+              <option value="get_cancellation_policy">get_cancellation_policy (Cancellation Deduction Policy)</option>
               <option value="list_products">list_products (Catalog &amp; Stock Levels)</option>
               <option value="list_orders">list_orders (Recent Orders &amp; Fulfillment)</option>
               <option value="get_inventory_summary">get_inventory_summary (Physical/Reserved/Available)</option>
+              <option value="list_audit_events">list_audit_events (Recent Operational Audit Trail)</option>
               <option value="get_user_profile">get_user_profile (Identity &amp; Scopes)</option>
             </select>
           </div>

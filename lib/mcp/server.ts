@@ -23,10 +23,14 @@ import {
   DASHBOARD_WIDGET_URI,
   PRODUCTS_WIDGET_URI,
   ORDER_WIDGET_URI,
+  BILL_WIDGET_URI,
   getDashboardWidgetHtml,
   getProductsWidgetHtml,
   getOrderWidgetHtml,
+  getBillWidgetHtml,
 } from "./widgets";
+import { formatDateTimeIST, formatCurrencyINR, amountToWordsINR } from "../utils/format";
+import { logAuditEvent } from "../audit/audit-service";
 
 export function createMcpServer(principal: McpAuthPrincipal) {
   const server = new McpServer(
@@ -36,7 +40,7 @@ export function createMcpServer(principal: McpAuthPrincipal) {
     },
     {
       instructions:
-        "Apex Inventory & Order Management Platform. Core rules: Available stock = Physical - Reserved. Always verify product SKU using get_product or search before creating orders or adjustments. For category management: use list_categories to see available categories with product counts, get_product_category to inspect a product's current category, update_product_category to move a product to a new category (e.g. moving MAKA-SC-001 from Lip Care to Skin Care), bulk_update_product_categories for batch reassignment (defaults to dryRun: true for safety preview), suggest_product_category for intelligent category recommendations based on product name and description, and create_category_if_missing to avoid duplicate categories. Destructive operations (delete_product, delete_order, delete_customer, delete_category, delete_payment, delete_return, factory_reset) and high-impact operations (negative stock adjustments, order cancellations) require confirmation in compliance with the ChatGPT MCP specification. Factory reset (factory_reset) requires asking the operator for the master security password ('Aezakmi@ff135') before execution. Packing slips exclude customer payment details. Delivered status does not mark order as paid. Use get_user_profile to identify operator context. For UI, follow the decoupled pattern: call data tools (get_dashboard_summary, list_products, get_order) to fetch data, then render tools (render_dashboard_widget, render_products_widget, render_order_widget) to display interactive components. For real-time updates and notifications, MCP Events (protocol version 2026-07-28) allows ChatGPT to subscribe to updates (order.created, order.status_changed, inventory.low_stock, inventory.adjusted, return.requested) via signed webhooks.",
+        "Apex Inventory & Order Management Platform. All website operations can be performed via corresponding MCP tools: catalog & categories (list_products, create_product, update_product, delete_product, category tools), inventory ledger (get_inventory_summary, adjust_inventory, receive_inventory), orders (list_orders, create_order, confirm_order, cancel_order, delete_order), packing (list_orders_to_pack, mark_order_packed), shipping (list_orders_to_ship, mark_order_shipped, mark_order_delivered), payments (list_payments, record_payment), returns (list_returns, register_return, approve_return), settings & company profile (get_company_settings, update_company_profile, update_billing_format_settings, update_regional_settings), order cancellation deduction policies (get_cancellation_policy, update_cancellation_policy, preview_cancellation_refund), digital tax invoices & bills (get_order_bill, get_digital_bill_url, generate_bill_share_message, render_bill_widget), and audit logs (list_audit_events). Core rules: Available stock = Physical - Reserved. Destructive operations (delete_product, delete_order, delete_customer, delete_category, delete_payment, delete_return, factory_reset) and high-impact operations require confirmation tokens. Factory reset requires master password ('Aezakmi@ff135'). For UI widgets, follow decoupled pattern: fetch data tool then call render tool (render_dashboard_widget, render_products_widget, render_order_widget, render_bill_widget).",
       capabilities: {
         tools: { listChanged: true },
         resources: { subscribe: false, listChanged: true },
@@ -124,6 +128,29 @@ export function createMcpServer(principal: McpAuthPrincipal) {
           uri: ORDER_WIDGET_URI,
           mimeType: "text/html;profile=mcp-app",
           text: getOrderWidgetHtml(),
+          _meta: {
+            ui: {
+              prefersBorder: true,
+            },
+          },
+        },
+      ],
+    })
+  );
+
+  server.registerResource(
+    "bill_widget",
+    BILL_WIDGET_URI,
+    {
+      mimeType: "text/html;profile=mcp-app",
+      description: "Interactive Digital Tax Invoice / Bill of Supply Widget UI for Apex Commerce",
+    },
+    async () => ({
+      contents: [
+        {
+          uri: BILL_WIDGET_URI,
+          mimeType: "text/html;profile=mcp-app",
+          text: getBillWidgetHtml(),
           _meta: {
             ui: {
               prefersBorder: true,
@@ -2500,6 +2527,639 @@ export function createMcpServer(principal: McpAuthPrincipal) {
           ui: { resourceUri: ORDER_WIDGET_URI },
           "openai/outputTemplate": ORDER_WIDGET_URI,
         },
+      };
+    }
+  );
+
+  // --- 11B. DIGITAL BILLING & TAX INVOICE OPERATIONS ---
+
+  server.registerTool(
+    "render_bill_widget",
+    {
+      title: "Render Order Tax Invoice Widget",
+      description:
+        "Render an interactive digital tax invoice card component for an order in MCP Apps UI (complies with OpenAI decoupled UI pattern).",
+      inputSchema: {
+        orderIdOrNumber: z.string().describe("Order ID or order number to render invoice for"),
+      },
+      annotations: {
+        readOnlyHint: true,
+        openWorldHint: false,
+        destructiveHint: false,
+      },
+      _meta: {
+        ui: { resourceUri: BILL_WIDGET_URI },
+        "openai/outputTemplate": BILL_WIDGET_URI,
+      },
+    },
+    async ({ orderIdOrNumber }) => {
+      requireScope("orders:read");
+      const order = await orderService.getOrderDetails(workspaceId, orderIdOrNumber);
+      if (!order) throw new Error(`Order not found: ${orderIdOrNumber}`);
+
+      const db = await getDb();
+      const [ws] = await (db as any)
+        .select()
+        .from(workspaces)
+        .where(eq(workspaces.id, workspaceId))
+        .limit(1);
+
+      const baseUrl = getBaseUrl();
+      const invoicePrefix = ws?.invoicePrefix || "INV";
+      const invoiceNumber = `${invoicePrefix}-${order.orderNumber}`;
+      const digitalBillUrl = `${baseUrl}/bill/${order.id}`;
+
+      const billPayload = {
+        invoiceNumber,
+        digitalBillUrl,
+        order: {
+          id: order.id,
+          orderNumber: order.orderNumber,
+          status: order.status,
+          paymentStatus: order.paymentStatus,
+          paymentMethod: order.paymentMethod,
+          subtotal: order.subtotal,
+          discount: order.discount,
+          shippingFee: order.shippingFee,
+          totalAmount: order.totalAmount,
+          cancellationFee: order.cancellationFee || "0.00",
+          cancellationReason: order.cancellationReason || null,
+          refundAmount: order.refundAmount || "0.00",
+          createdAt: order.createdAt,
+        },
+        customer: order.customer,
+        items: order.items,
+        company: {
+          name: ws?.companyName || ws?.name || "Apex Logistics",
+          phone: ws?.companyPhone || "+91 98765 43210",
+          timezone: ws?.timezone || "Asia/Kolkata",
+          currency: ws?.currency || "INR",
+        },
+      };
+
+      return {
+        content: [
+          {
+            type: "text",
+            text: `Tax Invoice widget rendered for Order ${order.orderNumber} (Invoice: ${invoiceNumber}, Total: ₹${order.totalAmount}).`,
+          },
+        ],
+        structuredContent: billPayload,
+        _meta: {
+          ui: { resourceUri: BILL_WIDGET_URI },
+          "openai/outputTemplate": BILL_WIDGET_URI,
+        },
+      };
+    }
+  );
+
+  server.registerTool(
+    "get_order_bill",
+    {
+      title: "Get Order Tax Invoice / Bill",
+      description:
+        "Retrieve complete digital tax invoice data for an order including invoice number, formatted date, customer info, itemized line items with SKU and unit prices, subtotal, discount, shipping, total, amount in words in INR, and cancellation deduction fee breakdown if cancelled.",
+      inputSchema: {
+        orderIdOrNumber: z.string().describe("Order ID (ord_...) or order number (ORD-2026-...)"),
+      },
+      annotations: {
+        readOnlyHint: true,
+        openWorldHint: false,
+        destructiveHint: false,
+      },
+    },
+    async ({ orderIdOrNumber }) => {
+      requireScope("orders:read");
+      const order = await orderService.getOrderDetails(workspaceId, orderIdOrNumber);
+      if (!order) throw new Error(`Order not found: ${orderIdOrNumber}`);
+
+      const db = await getDb();
+      const [ws] = await (db as any)
+        .select()
+        .from(workspaces)
+        .where(eq(workspaces.id, workspaceId))
+        .limit(1);
+
+      const baseUrl = getBaseUrl();
+      const invoicePrefix = ws?.invoicePrefix || "INV";
+      const invoiceNumber = `${invoicePrefix}-${order.orderNumber}`;
+      const amountInWords = amountToWordsINR(order.totalAmount);
+      const digitalBillUrl = `${baseUrl}/bill/${order.id}`;
+
+      const billData = {
+        invoiceNumber,
+        digitalBillUrl,
+        printUrl: `${digitalBillUrl}?print=true`,
+        amountInWords,
+        order: {
+          id: order.id,
+          orderNumber: order.orderNumber,
+          status: order.status,
+          paymentStatus: order.paymentStatus,
+          paymentMethod: order.paymentMethod,
+          source: order.source,
+          shippingAddress: order.shippingAddress,
+          subtotal: order.subtotal,
+          discount: order.discount,
+          shippingFee: order.shippingFee,
+          totalAmount: order.totalAmount,
+          cancellationFee: order.cancellationFee || "0.00",
+          cancellationReason: order.cancellationReason || null,
+          refundAmount: order.refundAmount || "0.00",
+          createdAt: order.createdAt,
+          createdAtFormattedIST: formatDateTimeIST(order.createdAt, ws?.timezone || "Asia/Kolkata"),
+        },
+        customer: order.customer,
+        items: order.items,
+        company: {
+          name: ws?.companyName || ws?.name || "Apex Logistics",
+          address: ws?.companyAddress || "Plot 42, Electronic City Phase 1, Hosur Road, Bengaluru, Karnataka - 560100, India",
+          phone: ws?.companyPhone || "+91 98765 43210",
+          email: ws?.companyEmail || "billing@apexlogistics.in",
+          taxId: ws?.companyTaxId || "GSTIN: 29ABCDE1234F1Z5",
+          logoUrl: ws?.companyLogoUrl || "",
+          website: ws?.companyWebsite || baseUrl,
+          timezone: ws?.timezone || "Asia/Kolkata",
+          currency: ws?.currency || "INR",
+          cancellationNotice: ws?.cancellationNotice || "A cancellation deduction fee applies to cancelled orders as per company policy.",
+        },
+      };
+
+      return {
+        content: [{ type: "text", text: JSON.stringify(billData, null, 2) }],
+        structuredContent: billData,
+      };
+    }
+  );
+
+  server.registerTool(
+    "get_digital_bill_url",
+    {
+      title: "Get Digital Bill & Print URL",
+      description:
+        "Get the shareable digital tax invoice URL (for customer preview or WhatsApp/SMS sending) and 1-click printable invoice URL for any order.",
+      inputSchema: {
+        orderIdOrNumber: z.string().describe("Order ID (ord_...) or order number (ORD-2026-...)"),
+      },
+      annotations: {
+        readOnlyHint: true,
+        openWorldHint: false,
+        destructiveHint: false,
+      },
+    },
+    async ({ orderIdOrNumber }) => {
+      requireScope("orders:read");
+      const order = await orderService.getOrderDetails(workspaceId, orderIdOrNumber);
+      if (!order) throw new Error(`Order not found: ${orderIdOrNumber}`);
+
+      const baseUrl = getBaseUrl();
+      const digitalBillUrl = `${baseUrl}/bill/${order.id}`;
+      const printUrl = `${digitalBillUrl}?print=true`;
+
+      return {
+        content: [
+          {
+            type: "text",
+            text: `Digital Tax Invoice URLs for Order ${order.orderNumber}:\n• Customer Bill View: ${digitalBillUrl}\n• Direct Print Link: ${printUrl}`,
+          },
+        ],
+        structuredContent: {
+          orderId: order.id,
+          orderNumber: order.orderNumber,
+          digitalBillUrl,
+          printUrl,
+        },
+      };
+    }
+  );
+
+  server.registerTool(
+    "generate_bill_share_message",
+    {
+      title: "Generate Bill Share Message (WhatsApp/SMS)",
+      description:
+        "Generate ready-to-send customer message containing order details, invoice number, order total formatted in INR, and the direct digital invoice URL for WhatsApp, SMS, or Email delivery.",
+      inputSchema: {
+        orderIdOrNumber: z.string().describe("Order ID (ord_...) or order number (ORD-2026-...)"),
+        channel: z.enum(["whatsapp", "sms", "email"]).optional().default("whatsapp"),
+      },
+      annotations: {
+        readOnlyHint: true,
+        openWorldHint: false,
+        destructiveHint: false,
+      },
+    },
+    async ({ orderIdOrNumber, channel }) => {
+      requireScope("orders:read");
+      const order = await orderService.getOrderDetails(workspaceId, orderIdOrNumber);
+      if (!order) throw new Error(`Order not found: ${orderIdOrNumber}`);
+
+      const baseUrl = getBaseUrl();
+      const digitalBillUrl = `${baseUrl}/bill/${order.id}`;
+      const custName = order.customer?.name || "Customer";
+      const totalFormatted = `₹${parseFloat(order.totalAmount || "0").toFixed(2)}`;
+
+      let messageText = "";
+      if (channel === "sms") {
+        messageText = `Dear ${custName}, your invoice for order ${order.orderNumber} (${totalFormatted}) is available at: ${digitalBillUrl}`;
+      } else if (channel === "email") {
+        messageText = `Dear ${custName},\n\nThank you for your order! Your digital tax invoice for order ${order.orderNumber} (Total: ${totalFormatted}) is ready.\n\nView or print your bill online: ${digitalBillUrl}\n\nBest regards,\nApex Logistics Team`;
+      } else {
+        messageText = `Hello ${custName}, here is your digital tax invoice for order ${order.orderNumber} (Total: ${totalFormatted}):\n${digitalBillUrl}`;
+      }
+
+      return {
+        content: [{ type: "text", text: messageText }],
+        structuredContent: {
+          channel: channel || "whatsapp",
+          customerName: custName,
+          customerPhone: order.customer?.phone || null,
+          orderNumber: order.orderNumber,
+          totalAmount: totalFormatted,
+          digitalBillUrl,
+          message: messageText,
+        },
+      };
+    }
+  );
+
+  server.registerTool(
+    "preview_cancellation_refund",
+    {
+      title: "Preview Cancellation Deduction & Refund",
+      description:
+        "Simulate and preview the exact cancellation deduction fee and net refund amount that will be applied to an order before actually cancelling it, based on current store settings.",
+      inputSchema: {
+        orderIdOrNumber: z.string().describe("Order ID (ord_...) or order number (ORD-2026-...)"),
+      },
+      annotations: {
+        readOnlyHint: true,
+        openWorldHint: false,
+        destructiveHint: false,
+      },
+    },
+    async ({ orderIdOrNumber }) => {
+      requireScope("orders:read");
+      const order = await orderService.getOrderDetails(workspaceId, orderIdOrNumber);
+      if (!order) throw new Error(`Order not found: ${orderIdOrNumber}`);
+
+      const db = await getDb();
+      const [ws] = await (db as any)
+        .select()
+        .from(workspaces)
+        .where(eq(workspaces.id, workspaceId))
+        .limit(1);
+
+      const totalAmount = parseFloat(order.totalAmount || "0");
+      const deductionType = ws?.cancellationDeductionType || "PERCENTAGE";
+      const deductionVal = parseFloat(ws?.cancellationDeductionValue || "0");
+
+      let calculatedFee = 0;
+      if (deductionType === "PERCENTAGE") {
+        calculatedFee = Math.round((totalAmount * (deductionVal / 100)) * 100) / 100;
+      } else if (deductionType === "FIXED") {
+        calculatedFee = Math.min(totalAmount, Math.max(0, deductionVal));
+      } else {
+        calculatedFee = 0;
+      }
+      const netRefund = Math.max(0, Math.round((totalAmount - calculatedFee) * 100) / 100);
+
+      const preview = {
+        orderId: order.id,
+        orderNumber: order.orderNumber,
+        currentStatus: order.status,
+        originalTotal: totalAmount.toFixed(2),
+        appliedPolicyType: deductionType,
+        appliedPolicyValue: deductionVal,
+        estimatedCancellationFee: calculatedFee.toFixed(2),
+        estimatedNetRefund: netRefund.toFixed(2),
+        restockPolicy: ws?.cancellationRestockPolicy || "RELEASE_TO_AVAILABLE",
+      };
+
+      return {
+        content: [
+          {
+            type: "text",
+            text: `Cancellation preview for Order ${order.orderNumber}: Total ₹${totalAmount.toFixed(2)} -> Deduction Fee: ₹${calculatedFee.toFixed(2)} (${deductionType === 'PERCENTAGE' ? deductionVal + '%' : 'Fixed ₹' + deductionVal}), Net Customer Refund: ₹${netRefund.toFixed(2)}. Restock Policy: ${preview.restockPolicy}.`,
+          },
+        ],
+        structuredContent: preview,
+      };
+    }
+  );
+
+  // --- 11C. SETTINGS, BRANDING & CANCELLATION DEDUCTION POLICY OPERATIONS ---
+
+  server.registerTool(
+    "get_company_settings",
+    {
+      title: "Get Company Settings & Branding",
+      description:
+        "Retrieve company business profile, name, contact info, tax ID (GSTIN), logo URL, website, invoice format, default Indian time zone, currency, and order cancellation policy.",
+      inputSchema: {},
+      annotations: {
+        readOnlyHint: true,
+        openWorldHint: false,
+        destructiveHint: false,
+      },
+    },
+    async () => {
+      const db = await getDb();
+      const [ws] = await (db as any)
+        .select()
+        .from(workspaces)
+        .where(eq(workspaces.id, workspaceId))
+        .limit(1);
+
+      if (!ws) throw new Error("Workspace not found");
+
+      const settings = {
+        companyName: ws.companyName || ws.name || "Apex Logistics",
+        companyAddress: ws.companyAddress || "Plot 42, Electronic City Phase 1, Hosur Road, Bengaluru, Karnataka - 560100, India",
+        companyPhone: ws.companyPhone || "+91 98765 43210",
+        companyEmail: ws.companyEmail || "billing@apexlogistics.in",
+        companyTaxId: ws.companyTaxId || "GSTIN: 29ABCDE1234F1Z5",
+        companyLogoUrl: ws.companyLogoUrl || "",
+        companyWebsite: ws.companyWebsite || getBaseUrl(),
+        invoicePrefix: ws.invoicePrefix || "INV",
+        invoiceFooterNotes: ws.invoiceFooterNotes || "1. Computer-generated tax invoice. No signature required.",
+        timezone: ws.timezone || "Asia/Kolkata",
+        currency: ws.currency || "INR",
+        cancellationDeductionType: ws.cancellationDeductionType || "PERCENTAGE",
+        cancellationDeductionValue: ws.cancellationDeductionValue || "5.00",
+        cancellationRestockPolicy: ws.cancellationRestockPolicy || "RELEASE_TO_AVAILABLE",
+        cancellationNotice: ws.cancellationNotice || "A cancellation deduction fee applies to cancelled orders as per company policy.",
+      };
+
+      return {
+        content: [{ type: "text", text: JSON.stringify(settings, null, 2) }],
+        structuredContent: settings,
+      };
+    }
+  );
+
+  server.registerTool(
+    "update_company_profile",
+    {
+      title: "Update Company Profile",
+      description:
+        "Update business profile information (company name, address, phone, email, tax ID/GSTIN, logo URL, website).",
+      inputSchema: {
+        companyName: z.string().optional().describe("Company or store business name"),
+        companyAddress: z.string().optional().describe("Physical business address"),
+        companyPhone: z.string().optional().describe("Contact phone number"),
+        companyEmail: z.string().email().optional().describe("Official contact or billing email"),
+        companyTaxId: z.string().optional().describe("GSTIN or tax identifier"),
+        companyLogoUrl: z.string().optional().describe("URL or base64 data for company logo"),
+        companyWebsite: z.string().optional().describe("Public website URL"),
+      },
+      annotations: {
+        readOnlyHint: false,
+        openWorldHint: false,
+        destructiveHint: false,
+      },
+    },
+    async (params) => {
+      requireScope("settings:write");
+      const db = await getDb();
+      const updatePayload: Record<string, any> = { updatedAt: new Date() };
+
+      if (params.companyName !== undefined) {
+        updatePayload.companyName = params.companyName;
+        updatePayload.name = params.companyName;
+      }
+      if (params.companyAddress !== undefined) updatePayload.companyAddress = params.companyAddress;
+      if (params.companyPhone !== undefined) updatePayload.companyPhone = params.companyPhone;
+      if (params.companyEmail !== undefined) updatePayload.companyEmail = params.companyEmail;
+      if (params.companyTaxId !== undefined) updatePayload.companyTaxId = params.companyTaxId;
+      if (params.companyLogoUrl !== undefined) updatePayload.companyLogoUrl = params.companyLogoUrl;
+      if (params.companyWebsite !== undefined) updatePayload.companyWebsite = params.companyWebsite;
+
+      await (db as any).update(workspaces).set(updatePayload).where(eq(workspaces.id, workspaceId));
+
+      await logAuditEvent({
+        workspaceId,
+        actorId: actor.id,
+        actorName: actor.name,
+        actorType: "AI_CLIENT",
+        toolName: "update_company_profile",
+        operation: "UPDATE_COMPANY_PROFILE",
+        targetRecord: "Company Settings",
+        beforeState: null,
+        afterState: updatePayload,
+        outcome: "SUCCESS",
+      });
+
+      return {
+        content: [
+          {
+            type: "text",
+            text: `Company profile updated successfully for "${params.companyName || 'Apex Commerce'}".`,
+          },
+        ],
+        structuredContent: { success: true, updated: updatePayload },
+      };
+    }
+  );
+
+  server.registerTool(
+    "update_billing_format_settings",
+    {
+      title: "Update Billing Format Settings",
+      description: "Update invoice prefix (e.g. INV) and footer terms/declarations printed on bills.",
+      inputSchema: {
+        invoicePrefix: z.string().min(1).max(10).optional().describe("Invoice number prefix (e.g. INV)"),
+        invoiceFooterNotes: z.string().optional().describe("Terms and conditions / declarations printed at bottom of bills"),
+      },
+      annotations: {
+        readOnlyHint: false,
+        openWorldHint: false,
+        destructiveHint: false,
+      },
+    },
+    async (params) => {
+      requireScope("settings:write");
+      const db = await getDb();
+      const updatePayload: Record<string, any> = { updatedAt: new Date() };
+      if (params.invoicePrefix !== undefined) updatePayload.invoicePrefix = params.invoicePrefix.toUpperCase();
+      if (params.invoiceFooterNotes !== undefined) updatePayload.invoiceFooterNotes = params.invoiceFooterNotes;
+
+      await (db as any).update(workspaces).set(updatePayload).where(eq(workspaces.id, workspaceId));
+
+      return {
+        content: [{ type: "text", text: `Billing format settings updated successfully.` }],
+        structuredContent: { success: true, updated: updatePayload },
+      };
+    }
+  );
+
+  server.registerTool(
+    "update_regional_settings",
+    {
+      title: "Update Regional Settings",
+      description: "Update store default time zone (e.g. Asia/Kolkata for IST) and currency (e.g. INR).",
+      inputSchema: {
+        timezone: z.string().optional().describe("Timezone identifier (e.g. Asia/Kolkata)"),
+        currency: z.string().optional().describe("3-letter currency code (e.g. INR)"),
+      },
+      annotations: {
+        readOnlyHint: false,
+        openWorldHint: false,
+        destructiveHint: false,
+      },
+    },
+    async (params) => {
+      requireScope("settings:write");
+      const db = await getDb();
+      const updatePayload: Record<string, any> = { updatedAt: new Date() };
+      if (params.timezone) updatePayload.timezone = params.timezone;
+      if (params.currency) updatePayload.currency = params.currency.toUpperCase();
+
+      await (db as any).update(workspaces).set(updatePayload).where(eq(workspaces.id, workspaceId));
+
+      return {
+        content: [{ type: "text", text: `Regional settings updated: Timezone=${params.timezone || 'unchanged'}, Currency=${params.currency || 'unchanged'}.` }],
+        structuredContent: { success: true, updated: updatePayload },
+      };
+    }
+  );
+
+  server.registerTool(
+    "get_cancellation_policy",
+    {
+      title: "Get Order Cancellation Policy",
+      description: "Retrieve active store order cancellation deduction policy, deduction rate, inventory restock policy, and customer refund terms.",
+      inputSchema: {},
+      annotations: {
+        readOnlyHint: true,
+        openWorldHint: false,
+        destructiveHint: false,
+      },
+    },
+    async () => {
+      const db = await getDb();
+      const [ws] = await (db as any)
+        .select()
+        .from(workspaces)
+        .where(eq(workspaces.id, workspaceId))
+        .limit(1);
+
+      const policy = {
+        deductionType: ws?.cancellationDeductionType || "PERCENTAGE",
+        deductionValue: ws?.cancellationDeductionValue || "5.00",
+        deductionValueFormatted: (ws?.cancellationDeductionType || "PERCENTAGE") === "PERCENTAGE" 
+          ? `${ws?.cancellationDeductionValue || "5.00"}%`
+          : `₹${ws?.cancellationDeductionValue || "5.00"}`,
+        restockPolicy: ws?.cancellationRestockPolicy || "RELEASE_TO_AVAILABLE",
+        cancellationNotice: ws?.cancellationNotice || "A cancellation deduction fee applies to cancelled orders as per company policy.",
+      };
+
+      return {
+        content: [{ type: "text", text: JSON.stringify(policy, null, 2) }],
+        structuredContent: policy,
+      };
+    }
+  );
+
+  server.registerTool(
+    "update_cancellation_policy",
+    {
+      title: "Update Order Cancellation Policy",
+      description:
+        "Configure store order cancellation fee deduction setting (PERCENTAGE, FIXED, NONE), deduction fee value, inventory restock policy (RELEASE_TO_AVAILABLE, HOLD_IN_RESERVE), and cancellation notice displayed on bills.",
+      inputSchema: {
+        cancellationDeductionType: z.enum(["PERCENTAGE", "FIXED", "NONE"]).describe("PERCENTAGE of total, FIXED in INR, or NONE (0%)"),
+        cancellationDeductionValue: z.number().min(0).describe("Deduction rate percentage (e.g. 10) or fixed amount in INR (e.g. 100)"),
+        cancellationRestockPolicy: z.enum(["RELEASE_TO_AVAILABLE", "HOLD_IN_RESERVE"]).describe("RELEASE_TO_AVAILABLE or HOLD_IN_RESERVE"),
+        cancellationNotice: z.string().optional().describe("Refund terms declaration displayed on digital bills"),
+      },
+      annotations: {
+        readOnlyHint: false,
+        openWorldHint: false,
+        destructiveHint: false,
+      },
+    },
+    async (params) => {
+      requireScope("settings:write");
+      const db = await getDb();
+      const updatePayload: Record<string, any> = {
+        cancellationDeductionType: params.cancellationDeductionType,
+        cancellationDeductionValue: params.cancellationDeductionValue.toFixed(2),
+        cancellationRestockPolicy: params.cancellationRestockPolicy,
+        updatedAt: new Date(),
+      };
+      if (params.cancellationNotice !== undefined) {
+        updatePayload.cancellationNotice = params.cancellationNotice;
+      }
+
+      await (db as any).update(workspaces).set(updatePayload).where(eq(workspaces.id, workspaceId));
+
+      await logAuditEvent({
+        workspaceId,
+        actorId: actor.id,
+        actorName: actor.name,
+        actorType: "AI_CLIENT",
+        toolName: "update_cancellation_policy",
+        operation: "UPDATE_CANCELLATION_POLICY",
+        targetRecord: "Cancellation Policy",
+        beforeState: null,
+        afterState: updatePayload,
+        outcome: "SUCCESS",
+      });
+
+      return {
+        content: [
+          {
+            type: "text",
+            text: `Cancellation policy updated successfully: Type=${params.cancellationDeductionType}, Value=${params.cancellationDeductionValue}, Restock=${params.cancellationRestockPolicy}.`,
+          },
+        ],
+        structuredContent: { success: true, policy: updatePayload },
+      };
+    }
+  );
+
+  // --- 11D. SYSTEM AUDIT & ACTIVITY LOG OPERATIONS ---
+
+  server.registerTool(
+    "list_audit_events",
+    {
+      title: "List System Audit Events",
+      description:
+        "Retrieve recent operational audit events and AI agent actions across the workspace, with optional filtering by operation type or actor.",
+      inputSchema: {
+        operation: z.string().optional().describe("Filter by operation (e.g. UPDATE_ORDER_STATUS, CREATE_ORDER)"),
+        actorType: z.enum(["USER", "AI_AGENT", "ALL"]).optional().default("ALL"),
+        limit: z.number().min(1).max(100).optional().default(25),
+      },
+      annotations: {
+        readOnlyHint: true,
+        openWorldHint: false,
+        destructiveHint: false,
+      },
+    },
+    async ({ operation, actorType, limit }) => {
+      requireScope("audit:read");
+      const db = await getDb();
+      let query = (db as any)
+        .select()
+        .from(auditEvents)
+        .where(eq(auditEvents.workspaceId, workspaceId))
+        .orderBy(desc(auditEvents.createdAt))
+        .limit(limit || 25);
+
+      const events = await query;
+      let filtered = events;
+      if (operation) {
+        filtered = filtered.filter((e: any) => e.operation === operation);
+      }
+      if (actorType && actorType !== "ALL") {
+        filtered = filtered.filter((e: any) => e.actorType === actorType);
+      }
+
+      return {
+        content: [{ type: "text", text: JSON.stringify(filtered, null, 2) }],
+        structuredContent: { count: filtered.length, events: filtered },
       };
     }
   );

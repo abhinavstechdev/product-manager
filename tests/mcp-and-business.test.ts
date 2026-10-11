@@ -922,6 +922,164 @@ async function runTests() {
     notice: cancelledBillData.company.cancellationNotice,
   });
 
+  // --- Testing Full Website Operations via MCP Tools ---
+  console.log("\n--- Testing Universal Website Operations via MCP ---");
+
+  // 1. Test get_company_settings
+  const mcpGetSettings = await sendMcpRequest({
+    jsonrpc: "2.0",
+    id: 101,
+    method: "tools/call",
+    params: { name: "get_company_settings", arguments: {} },
+  });
+  if (mcpGetSettings.error) throw new Error(`MCP get_company_settings failed: ${mcpGetSettings.error.message}`);
+  const mcpSettingsData = JSON.parse(mcpGetSettings.result.content[0].text);
+  if (!mcpSettingsData.timezone || !mcpSettingsData.currency) {
+    throw new Error("get_company_settings missing timezone or currency");
+  }
+  console.log("✓ MCP get_company_settings verified:", {
+    name: mcpSettingsData.companyName,
+    timezone: mcpSettingsData.timezone,
+    currency: mcpSettingsData.currency,
+    deductionType: mcpSettingsData.cancellationDeductionType,
+  });
+
+  // 2. Test update_company_profile via MCP
+  const mcpUpdateProfile = await sendMcpRequest({
+    jsonrpc: "2.0",
+    id: 102,
+    method: "tools/call",
+    params: {
+      name: "update_company_profile",
+      arguments: {
+        companyName: "Apex Omnichannel Retail Pvt Ltd",
+        companyPhone: "+91 80 1234 5678",
+      },
+    },
+  });
+  if (mcpUpdateProfile.error) throw new Error(`MCP update_company_profile failed: ${mcpUpdateProfile.error.message}`);
+  console.log("✓ MCP update_company_profile verified:", mcpUpdateProfile.result.content[0].text);
+
+  // 3. Test update_cancellation_policy via MCP
+  const mcpUpdatePolicy = await sendMcpRequest({
+    jsonrpc: "2.0",
+    id: 103,
+    method: "tools/call",
+    params: {
+      name: "update_cancellation_policy",
+      arguments: {
+        cancellationDeductionType: "PERCENTAGE",
+        cancellationDeductionValue: 12.5,
+        cancellationRestockPolicy: "RELEASE_TO_AVAILABLE",
+        cancellationNotice: "A 12.5% cancellation deduction applies to all store orders.",
+      },
+    },
+  });
+  if (mcpUpdatePolicy.error) throw new Error(`MCP update_cancellation_policy failed: ${mcpUpdatePolicy.error.message}`);
+  console.log("✓ MCP update_cancellation_policy verified: 12.5% policy configured via MCP");
+
+  // 4. Test get_cancellation_policy via MCP
+  const mcpGetPolicy = await sendMcpRequest({
+    jsonrpc: "2.0",
+    id: 104,
+    method: "tools/call",
+    params: { name: "get_cancellation_policy", arguments: {} },
+  });
+  const policyData = JSON.parse(mcpGetPolicy.result.content[0].text);
+  if (policyData.deductionValue !== "12.50") {
+    throw new Error(`get_cancellation_policy expected 12.50, got ${policyData.deductionValue}`);
+  }
+  console.log("✓ MCP get_cancellation_policy verified:", policyData);
+
+  // 5. Test preview_cancellation_refund via MCP
+  const mcpPreview = await sendMcpRequest({
+    jsonrpc: "2.0",
+    id: 105,
+    method: "tools/call",
+    params: {
+      name: "preview_cancellation_refund",
+      arguments: { orderIdOrNumber: cancelTestOrder.orderId },
+    },
+  });
+  if (mcpPreview.error) throw new Error(`MCP preview_cancellation_refund failed: ${mcpPreview.error.message}`);
+  console.log("✓ MCP preview_cancellation_refund verified:", mcpPreview.result.content[0].text);
+
+  // 6. Test get_order_bill via MCP
+  const mcpBill = await sendMcpRequest({
+    jsonrpc: "2.0",
+    id: 106,
+    method: "tools/call",
+    params: {
+      name: "get_order_bill",
+      arguments: { orderIdOrNumber: cancelTestOrder.orderId },
+    },
+  });
+  if (mcpBill.error) throw new Error(`MCP get_order_bill failed: ${mcpBill.error.message}`);
+  const mcpBillData = JSON.parse(mcpBill.result.content[0].text);
+  if (!mcpBillData.invoiceNumber || !mcpBillData.digitalBillUrl) {
+    throw new Error("get_order_bill missing invoiceNumber or digitalBillUrl");
+  }
+  console.log("✓ MCP get_order_bill verified:", {
+    invoiceNumber: mcpBillData.invoiceNumber,
+    digitalBillUrl: mcpBillData.digitalBillUrl,
+    amountInWords: mcpBillData.amountInWords,
+  });
+
+  // 7. Test get_digital_bill_url via MCP
+  const mcpUrl = await sendMcpRequest({
+    jsonrpc: "2.0",
+    id: 107,
+    method: "tools/call",
+    params: {
+      name: "get_digital_bill_url",
+      arguments: { orderIdOrNumber: cancelTestOrder.orderId },
+    },
+  });
+  if (mcpUrl.error) throw new Error(`MCP get_digital_bill_url failed: ${mcpUrl.error.message}`);
+  console.log("✓ MCP get_digital_bill_url verified:", mcpUrl.result.structuredContent);
+
+  // 8. Test generate_bill_share_message via MCP
+  const mcpShare = await sendMcpRequest({
+    jsonrpc: "2.0",
+    id: 108,
+    method: "tools/call",
+    params: {
+      name: "generate_bill_share_message",
+      arguments: { orderIdOrNumber: cancelTestOrder.orderId, channel: "whatsapp" },
+    },
+  });
+  if (mcpShare.error) throw new Error(`MCP generate_bill_share_message failed: ${mcpShare.error.message}`);
+  console.log("✓ MCP generate_bill_share_message verified:", mcpShare.result.content[0].text);
+
+  // 9. Test render_bill_widget via MCP Apps
+  const mcpWidget = await sendMcpRequest({
+    jsonrpc: "2.0",
+    id: 109,
+    method: "tools/call",
+    params: {
+      name: "render_bill_widget",
+      arguments: { orderIdOrNumber: cancelTestOrder.orderId },
+    },
+  });
+  if (mcpWidget.error) throw new Error(`MCP render_bill_widget failed: ${mcpWidget.error.message}`);
+  if (!mcpWidget.result._meta?.ui?.resourceUri?.includes("bill.html")) {
+    throw new Error("render_bill_widget missing bill.html UI resource URI");
+  }
+  console.log("✓ MCP render_bill_widget verified:", mcpWidget.result._meta.ui.resourceUri);
+
+  // 10. Test list_audit_events via MCP
+  const mcpAudits = await sendMcpRequest({
+    jsonrpc: "2.0",
+    id: 110,
+    method: "tools/call",
+    params: {
+      name: "list_audit_events",
+      arguments: { limit: 10 },
+    },
+  });
+  if (mcpAudits.error) throw new Error(`MCP list_audit_events failed: ${mcpAudits.error.message}`);
+  console.log("✓ MCP list_audit_events verified. Events retrieved:", mcpAudits.result.structuredContent.count);
+
   console.log("\n=======================================================");
   console.log("ALL PLATFORM AND MCP VERIFICATION TESTS PASSED CLEANLY!");
   console.log("=======================================================\n");

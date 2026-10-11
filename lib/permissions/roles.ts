@@ -28,7 +28,10 @@ export type McpScope =
   | "returns:write"
   | "reports:read"
   | "reports:export"
-  | "audit:read";
+  | "audit:read"
+  | "settings:read"
+  | "settings:write"
+  | "billing:read";
 
 export const ALL_MCP_SCOPES: McpScope[] = [
   "dashboard:read",
@@ -53,6 +56,9 @@ export const ALL_MCP_SCOPES: McpScope[] = [
   "reports:read",
   "reports:export",
   "audit:read",
+  "settings:read",
+  "settings:write",
+  "billing:read",
 ];
 
 // Map user roles to their default allowed MCP scopes
@@ -81,6 +87,9 @@ export const ROLE_SCOPES: Record<UserRole, McpScope[]> = {
     "reports:read",
     "reports:export",
     "audit:read",
+    "settings:read",
+    "settings:write",
+    "billing:read",
   ],
   INVENTORY_MANAGER: [
     "dashboard:read",

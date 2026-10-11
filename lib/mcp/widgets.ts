@@ -4,6 +4,7 @@
 export const DASHBOARD_WIDGET_URI = "ui://widget/dashboard.html";
 export const PRODUCTS_WIDGET_URI = "ui://widget/products.html";
 export const ORDER_WIDGET_URI = "ui://widget/order.html";
+export const BILL_WIDGET_URI = "ui://widget/bill.html";
 
 const SHARED_CSS = `
   :root {
@@ -557,6 +558,192 @@ export function getOrderWidgetHtml(): string {
         btn.textContent = "🚚 Dispatch Shipment";
       }
     };
+  </script>
+</body>
+</html>`;
+}
+
+export function getBillWidgetHtml(): string {
+  return `<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Digital Tax Invoice Widget</title>
+  <style>
+    ${SHARED_CSS}
+    .invoice-badge {
+      font-size: 10px;
+      font-weight: 700;
+      padding: 3px 8px;
+      border-radius: 6px;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+    }
+    .status-cancelled { background: rgba(239, 68, 68, 0.2); color: #f87171; border: 1px solid rgba(239, 68, 68, 0.3); }
+    .status-paid { background: rgba(16, 185, 129, 0.2); color: #34d399; border: 1px solid rgba(16, 185, 129, 0.3); }
+    .status-pending { background: rgba(245, 158, 11, 0.2); color: #fbbf24; border: 1px solid rgba(245, 158, 11, 0.3); }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <div class="header">
+      <div>
+        <div class="title">
+          <span>🧾 Tax Invoice / Bill of Supply</span>
+        </div>
+        <div style="font-size: 11px; color: var(--text-muted); margin-top: 2px;" id="company-name">Apex Logistics</div>
+      </div>
+      <div style="text-align: right;">
+        <span id="bill-status-badge" class="invoice-badge status-pending">LOADING</span>
+        <div style="font-family: monospace; font-size: 11px; color: #818cf8; margin-top: 4px;" id="bill-invoice-num">—</div>
+      </div>
+    </div>
+
+    <!-- Customer & Date -->
+    <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 12px; font-size: 11px; background: rgba(0,0,0,0.2); padding: 10px; border-radius: 8px;">
+      <div>
+        <span style="color: var(--text-muted); font-size: 9px; text-transform: uppercase; font-weight: 700; display: block;">Billed To:</span>
+        <span id="bill-cust-name" style="font-weight: 700; color: #fff;">—</span>
+        <div id="bill-cust-phone" style="color: var(--text-muted); font-family: monospace;">—</div>
+      </div>
+      <div>
+        <span style="color: var(--text-muted); font-size: 9px; text-transform: uppercase; font-weight: 700; display: block;">Invoice Date:</span>
+        <span id="bill-date" style="color: #fff;">—</span>
+        <div id="bill-payment-mode" style="color: var(--text-muted);">—</div>
+      </div>
+    </div>
+
+    <!-- Cancellation Notice if cancelled -->
+    <div id="bill-cancelled-box" style="display: none; background: rgba(239, 68, 68, 0.15); border: 1px solid rgba(239, 68, 68, 0.3); border-radius: 8px; padding: 10px; margin-bottom: 12px; font-size: 11px;">
+      <span style="font-weight: 700; color: #f87171;">⚠️ This Order is Cancelled</span>
+      <div id="bill-cancelled-reason" style="color: #fca5a5; margin-top: 2px;">—</div>
+    </div>
+
+    <!-- Items Table -->
+    <table>
+      <thead>
+        <tr>
+          <th>SKU</th>
+          <th>Description</th>
+          <th>Qty</th>
+          <th style="text-align: right;">Amount</th>
+        </tr>
+      </thead>
+      <tbody id="bill-items-body">
+        <tr><td colspan="4" style="text-align: center; color: var(--text-muted);">Loading items...</td></tr>
+      </tbody>
+    </table>
+
+    <!-- Financial Breakdown -->
+    <div style="margin-top: 12px; padding-top: 10px; border-top: 1px solid var(--card-border); font-size: 11px;">
+      <div style="display: flex; justify-content: space-between; margin-bottom: 4px;">
+        <span style="color: var(--text-muted);">Subtotal:</span>
+        <span id="bill-subtotal" style="font-family: monospace; font-weight: 600;">₹0.00</span>
+      </div>
+      <div id="bill-discount-row" style="display: none; justify-content: space-between; margin-bottom: 4px; color: #34d399;">
+        <span>Order Discount:</span>
+        <span id="bill-discount" style="font-family: monospace; font-weight: 600;">-₹0.00</span>
+      </div>
+      <div style="display: flex; justify-content: space-between; margin-bottom: 4px;">
+        <span style="color: var(--text-muted);">Shipping:</span>
+        <span id="bill-shipping" style="font-family: monospace; font-weight: 600;">₹0.00</span>
+      </div>
+      <div style="display: flex; justify-content: space-between; margin-top: 6px; padding-top: 6px; border-top: 1px solid rgba(255,255,255,0.1); font-size: 13px; font-weight: 800;">
+        <span id="bill-total-label">Total Amount:</span>
+        <span id="bill-total" style="font-family: monospace; color: #818cf8;">₹0.00</span>
+      </div>
+
+      <!-- Cancellation Deduction rows if cancelled -->
+      <div id="bill-cancellation-rows" style="display: none; margin-top: 6px; padding-top: 6px; border-top: 1px dashed rgba(239,68,68,0.3); font-size: 11px;">
+        <div style="display: flex; justify-content: space-between; color: #f87171;">
+          <span>Cancellation Deduction Fee:</span>
+          <span id="bill-cancel-fee" style="font-family: monospace; font-weight: 700;">-₹0.00</span>
+        </div>
+        <div style="display: flex; justify-content: space-between; color: #34d399; font-size: 13px; font-weight: 800; margin-top: 4px;">
+          <span>Net Refund / Payable:</span>
+          <span id="bill-net-refund" style="font-family: monospace;">₹0.00</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- Actions -->
+    <div style="display: flex; gap: 8px; margin-top: 14px; padding-top: 10px; border-top: 1px solid var(--card-border);">
+      <a id="btn-view-digital" href="#" target="_blank" class="btn btn-primary" style="text-decoration: none; font-size: 11px; flex: 1; text-align: center;">
+        🌐 View Digital Bill URL
+      </a>
+      <a id="btn-print-bill" href="#" target="_blank" class="btn btn-secondary" style="text-decoration: none; font-size: 11px; text-align: center;">
+        🖨️ Print Invoice
+      </a>
+    </div>
+  </div>
+
+  <script>
+    function renderBill(data) {
+      if (!data) return;
+      const order = data.order || data;
+      const customer = data.customer || {};
+      const company = data.company || {};
+      const items = data.items || [];
+
+      document.getElementById("company-name").textContent = company.name || "Apex Logistics";
+      document.getElementById("bill-invoice-num").textContent = data.invoiceNumber || ("INV-" + (order.orderNumber || ""));
+      document.getElementById("bill-cust-name").textContent = customer.name || "Direct Customer";
+      document.getElementById("bill-cust-phone").textContent = customer.phone || "—";
+      document.getElementById("bill-date").textContent = new Date(order.createdAt || Date.now()).toLocaleDateString("en-IN", {
+        day: "numeric", month: "short", year: "numeric"
+      });
+      document.getElementById("bill-payment-mode").textContent = order.paymentMethod || "Cash on Delivery";
+
+      // Status badge
+      const badge = document.getElementById("bill-status-badge");
+      if (order.status === "CANCELLED") {
+        badge.textContent = "CANCELLED";
+        badge.className = "invoice-badge status-cancelled";
+        document.getElementById("bill-cancelled-box").style.display = "block";
+        document.getElementById("bill-cancelled-reason").textContent = order.cancellationReason || "Order cancelled as per policy";
+        document.getElementById("bill-total-label").textContent = "Original Order Total:";
+        document.getElementById("bill-cancellation-rows").style.display = "block";
+        document.getElementById("bill-cancel-fee").textContent = "-₹" + Number(order.cancellationFee || 0).toFixed(2);
+        document.getElementById("bill-net-refund").textContent = "₹" + Number(order.refundAmount || (order.totalAmount - (order.cancellationFee || 0))).toFixed(2);
+      } else if (order.paymentStatus === "PAID") {
+        badge.textContent = "PAID IN FULL";
+        badge.className = "invoice-badge status-paid";
+      } else {
+        badge.textContent = order.status || "CONFIRMED";
+        badge.className = "invoice-badge status-pending";
+      }
+
+      // Items
+      const tbody = document.getElementById("bill-items-body");
+      tbody.innerHTML = "";
+      items.forEach(it => {
+        const tr = document.createElement("tr");
+        tr.innerHTML = \`
+          <td style="font-family: monospace; color: #818cf8;">\${it.sku || "—"}</td>
+          <td>\${it.productName || it.name || "Item"}</td>
+          <td style="font-weight: 600;">\${it.quantity}</td>
+          <td style="text-align: right; font-family: monospace;">₹\${Number(it.totalPrice || (it.quantity * it.unitPrice) || 0).toFixed(2)}</td>
+        \`;
+        tbody.appendChild(tr);
+      });
+
+      // Totals
+      document.getElementById("bill-subtotal").textContent = "₹" + Number(order.subtotal || 0).toFixed(2);
+      document.getElementById("bill-shipping").textContent = Number(order.shippingFee || 0) > 0 ? ("₹" + Number(order.shippingFee).toFixed(2)) : "FREE";
+      document.getElementById("bill-total").textContent = "₹" + Number(order.totalAmount || 0).toFixed(2);
+
+      if (Number(order.discount || 0) > 0) {
+        document.getElementById("bill-discount-row").style.display = "flex";
+        document.getElementById("bill-discount").textContent = "-₹" + Number(order.discount).toFixed(2);
+      }
+
+      // URLs
+      const digitalUrl = data.digitalBillUrl || ("/bill/" + (order.id || order.orderNumber));
+      document.getElementById("btn-view-digital").href = digitalUrl;
+      document.getElementById("btn-print-bill").href = digitalUrl + "?print=true";
+    }
+
+    window.onToolResult = renderBill;
   </script>
 </body>
 </html>`;
