@@ -1080,6 +1080,197 @@ async function runTests() {
   if (mcpAudits.error) throw new Error(`MCP list_audit_events failed: ${mcpAudits.error.message}`);
   console.log("✓ MCP list_audit_events verified. Events retrieved:", mcpAudits.result.structuredContent.count);
 
+  // 11. Test Advanced Store Operations & AI Intelligence Suite
+  console.log("\n--- Testing Advanced Store Operations & AI Intelligence Suite ---");
+
+  // 11.1 Test forecast_stockout_risk
+  const mcpForecast = await sendMcpRequest({
+    jsonrpc: "2.0",
+    id: 111,
+    method: "tools/call",
+    params: {
+      name: "forecast_stockout_risk",
+      arguments: { lookbackDays: 30, leadTimeDays: 7, targetBufferDays: 30 },
+    },
+  });
+  if (mcpForecast.error) throw new Error(`MCP forecast_stockout_risk failed: ${mcpForecast.error.message}`);
+  const forecastSummary = mcpForecast.result.structuredContent.summary;
+  console.log("✓ MCP forecast_stockout_risk verified:", {
+    totalProductsAnalyzed: forecastSummary.totalProductsAnalyzed,
+    totalAtRiskProducts: forecastSummary.totalAtRiskProducts,
+    totalCapitalRequiredFormatted: forecastSummary.totalCapitalRequiredFormatted,
+  });
+
+  // 11.2 Test draft_order_from_text (Preview Mode)
+  const mcpDraftPreview = await sendMcpRequest({
+    jsonrpc: "2.0",
+    id: 112,
+    method: "tools/call",
+    params: {
+      name: "draft_order_from_text",
+      arguments: {
+        rawText: `Hi, I need 1 unit of ${dynamicTestProd.name} for Rajesh Patel, phone: 9876543210, address: Flat 301, Lakeview Apts, Whitefield, Bengaluru 560066. COD.`,
+        autoCommit: false,
+      },
+    },
+  });
+  if (mcpDraftPreview.error) throw new Error(`MCP draft_order_from_text preview failed: ${mcpDraftPreview.error.message}`);
+  const draftData = mcpDraftPreview.result.structuredContent;
+  if (!draftData.isComplete || draftData.items.length === 0) {
+    throw new Error("draft_order_from_text failed to match customer or items in preview mode!");
+  }
+  console.log("✓ MCP draft_order_from_text (Preview Mode) verified:", {
+    customer: draftData.customer.name,
+    matchedItems: draftData.items.length,
+    totalAmount: draftData.totalAmount,
+    ready: draftData.allStockSufficient,
+  });
+
+  // 11.3 Test draft_order_from_text (Auto-Commit Mode)
+  const mcpDraftCommit = await sendMcpRequest({
+    jsonrpc: "2.0",
+    id: 113,
+    method: "tools/call",
+    params: {
+      name: "draft_order_from_text",
+      arguments: {
+        rawText: `Hi, please book 1 unit of ${dynamicTestProd.name} for Rajesh Patel, phone: 9876543210, address: Flat 301, Lakeview Apts, Whitefield, Bengaluru 560066. COD.`,
+        autoCommit: true,
+      },
+    },
+  });
+  if (mcpDraftCommit.error) throw new Error(`MCP draft_order_from_text commit failed: ${mcpDraftCommit.error.message}`);
+  const committedOrder = mcpDraftCommit.result.structuredContent;
+  if (!committedOrder.committed || !committedOrder.orderNumber || !committedOrder.digitalBillUrl) {
+    throw new Error("draft_order_from_text commit missing committed flag, orderNumber, or digitalBillUrl!");
+  }
+  console.log("✓ MCP draft_order_from_text (Auto-Commit Mode) verified:", {
+    orderNumber: committedOrder.orderNumber,
+    digitalBillUrl: committedOrder.digitalBillUrl,
+    totalAmount: committedOrder.totalAmount,
+  });
+
+  // 11.4 Test bulk_mark_orders_packed
+  const mcpBulkPack = await sendMcpRequest({
+    jsonrpc: "2.0",
+    id: 114,
+    method: "tools/call",
+    params: {
+      name: "bulk_mark_orders_packed",
+      arguments: {
+        orderIds: [committedOrder.orderNumber],
+        packingNotes: "Standard corrugated box with bubble wrap",
+      },
+    },
+  });
+  if (mcpBulkPack.error) throw new Error(`MCP bulk_mark_orders_packed failed: ${mcpBulkPack.error.message}`);
+  const bulkPackResult = mcpBulkPack.result.structuredContent;
+  if (bulkPackResult.successCount !== 1) {
+    throw new Error(`bulk_mark_orders_packed expected 1 success, got ${bulkPackResult.successCount}`);
+  }
+  console.log("✓ MCP bulk_mark_orders_packed verified:", {
+    total: bulkPackResult.total,
+    successCount: bulkPackResult.successCount,
+    orderStatus: bulkPackResult.results[0].status,
+  });
+
+  // 11.5 Test bulk_adjust_inventory
+  const mcpBulkAdjust = await sendMcpRequest({
+    jsonrpc: "2.0",
+    id: 115,
+    method: "tools/call",
+    params: {
+      name: "bulk_adjust_inventory",
+      arguments: {
+        adjustments: [
+          {
+            productIdOrSku: dynamicTestProd.sku,
+            quantityChange: 15,
+            reason: "Container shipment batch inbound receipt",
+            type: "STOCK_RECEIVED",
+          },
+        ],
+      },
+    },
+  });
+  if (mcpBulkAdjust.error) throw new Error(`MCP bulk_adjust_inventory failed: ${mcpBulkAdjust.error.message}`);
+  const bulkAdjResult = mcpBulkAdjust.result.structuredContent;
+  if (bulkAdjResult.successCount !== 1) {
+    throw new Error(`bulk_adjust_inventory expected 1 success, got ${bulkAdjResult.successCount}`);
+  }
+  console.log("✓ MCP bulk_adjust_inventory verified:", {
+    total: bulkAdjResult.total,
+    successCount: bulkAdjResult.successCount,
+    newQty: bulkAdjResult.results[0].newQty,
+  });
+
+  // 11.6 Test bulk_update_order_status
+  const mcpBulkStatus = await sendMcpRequest({
+    jsonrpc: "2.0",
+    id: 116,
+    method: "tools/call",
+    params: {
+      name: "bulk_update_order_status",
+      arguments: {
+        orderIds: [committedOrder.orderNumber],
+        newStatus: "SHIPPED",
+        note: "Dispatched via logistics partner",
+      },
+    },
+  });
+  if (mcpBulkStatus.error) throw new Error(`MCP bulk_update_order_status failed: ${mcpBulkStatus.error.message}`);
+  if (mcpBulkStatus.result.structuredContent.successCount !== 1) {
+    throw new Error(`Expected bulk_update_order_status successCount === 1, got ${mcpBulkStatus.result.structuredContent.successCount}`);
+  }
+  console.log("✓ MCP bulk_update_order_status verified:", {
+    total: mcpBulkStatus.result.structuredContent.total,
+    successCount: mcpBulkStatus.result.structuredContent.successCount,
+    targetStatus: mcpBulkStatus.result.structuredContent.targetStatus,
+  });
+
+  // 11.7 Test reconcile_daily_finances
+  const mcpReconciliation = await sendMcpRequest({
+    jsonrpc: "2.0",
+    id: 117,
+    method: "tools/call",
+    params: {
+      name: "reconcile_daily_finances",
+      arguments: {},
+    },
+  });
+  if (mcpReconciliation.error) throw new Error(`MCP reconcile_daily_finances failed: ${mcpReconciliation.error.message}`);
+  const reconSummary = mcpReconciliation.result.structuredContent.summary;
+  console.log("✓ MCP reconcile_daily_finances verified:", {
+    dateIST: reconSummary.reconciliationDateIST,
+    ordersBookedCount: reconSummary.ordersBookedCount,
+    grossBookedRevenue: reconSummary.grossBookedRevenueFormatted,
+    collectedPayments: reconSummary.totalCollectedPaymentsFormatted,
+    netRealizedRevenue: reconSummary.netRealizedRevenueFormatted,
+    discrepancyCount: reconSummary.discrepancyCount,
+  });
+
+  // 11.8 Test send_customer_notification
+  const mcpNotify = await sendMcpRequest({
+    jsonrpc: "2.0",
+    id: 118,
+    method: "tools/call",
+    params: {
+      name: "send_customer_notification",
+      arguments: {
+        orderIdOrNumber: committedOrder.orderNumber,
+        channel: "WHATSAPP",
+        type: "INVOICE_BILL",
+        customNote: "Your order will be dispatched via Blue Dart tomorrow morning.",
+      },
+    },
+  });
+  if (mcpNotify.error) throw new Error(`MCP send_customer_notification failed: ${mcpNotify.error.message}`);
+  console.log("✓ MCP send_customer_notification verified:", {
+    channel: mcpNotify.result.structuredContent.channel,
+    recipient: mcpNotify.result.structuredContent.recipient,
+    status: mcpNotify.result.structuredContent.status,
+  });
+
   console.log("\n=======================================================");
   console.log("ALL PLATFORM AND MCP VERIFICATION TESTS PASSED CLEANLY!");
   console.log("=======================================================\n");

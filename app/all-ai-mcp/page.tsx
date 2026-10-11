@@ -265,7 +265,12 @@ asyncio.run(main())`;
           method: "tools/call",
           params: {
             name: selectedTestTool,
-            arguments: {},
+            arguments:
+              selectedTestTool === "draft_order_from_text"
+                ? { rawText: "Need 2 units for Priya Sharma, phone: 9876543210, Indiranagar Bengaluru 560038. COD please." }
+                : selectedTestTool === "bulk_mark_orders_packed"
+                ? { orderIds: ["ORD-2026-000001"] }
+                : {},
           },
         }),
       });
@@ -293,7 +298,7 @@ asyncio.run(main())`;
               Universal Integration Hub
             </span>
             <span className="text-[10px] bg-emerald-500/10 text-emerald-300 font-mono px-2 py-0.5 rounded border border-emerald-500/20 font-semibold">
-              90+ Tools Ready
+              105+ Tools Ready
             </span>
           </div>
           <h1 className="text-2xl sm:text-3xl font-black text-white flex items-center gap-2.5">
@@ -793,6 +798,10 @@ asyncio.run(main())`;
               className="w-full px-3.5 py-2.5 rounded-xl bg-slate-950 border border-slate-800 text-white text-xs font-mono focus:outline-none focus:border-indigo-500 transition cursor-pointer"
             >
               <option value="get_dashboard_summary">get_dashboard_summary (Business Aggregates)</option>
+              <option value="forecast_stockout_risk">forecast_stockout_risk (Stockout Velocity &amp; Reorder Advisor)</option>
+              <option value="reconcile_daily_finances">reconcile_daily_finances (Daily Financial Audit &amp; Reconciliation)</option>
+              <option value="draft_order_from_text">draft_order_from_text (Conversational Natural Language Order Drafter)</option>
+              <option value="bulk_mark_orders_packed">bulk_mark_orders_packed (Bulk Warehouse Packing Batch)</option>
               <option value="get_company_settings">get_company_settings (Store Profile &amp; Settings)</option>
               <option value="get_cancellation_policy">get_cancellation_policy (Cancellation Deduction Policy)</option>
               <option value="list_products">list_products (Catalog &amp; Stock Levels)</option>

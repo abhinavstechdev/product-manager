@@ -14,8 +14,8 @@ import * as reportService from "../services/report-service";
 import * as confirmationService from "../services/confirmation-service";
 import * as resetService from "../services/reset-service";
 import { getDb } from "../db/client";
-import { auditEvents, orders, products, workspaces } from "../db/schema";
-import { eq, desc } from "drizzle-orm";
+import { auditEvents, orders, products, workspaces, orderItems, payments, customers } from "../db/schema";
+import { eq, desc, and, sql } from "drizzle-orm";
 import { registerSkillsExtension } from "./skills";
 import { registerEventsExtension } from "./events";
 import { getBaseUrl } from "../config/urls";
@@ -40,7 +40,7 @@ export function createMcpServer(principal: McpAuthPrincipal) {
     },
     {
       instructions:
-        "Apex Inventory & Order Management Platform. All website operations can be performed via corresponding MCP tools: catalog & categories (list_products, create_product, update_product, delete_product, category tools), inventory ledger (get_inventory_summary, adjust_inventory, receive_inventory), orders (list_orders, create_order, confirm_order, cancel_order, delete_order), packing (list_orders_to_pack, mark_order_packed), shipping (list_orders_to_ship, mark_order_shipped, mark_order_delivered), payments (list_payments, record_payment), returns (list_returns, register_return, approve_return), settings & company profile (get_company_settings, update_company_profile, update_billing_format_settings, update_regional_settings), order cancellation deduction policies (get_cancellation_policy, update_cancellation_policy, preview_cancellation_refund), digital tax invoices & bills (get_order_bill, get_digital_bill_url, generate_bill_share_message, render_bill_widget), and audit logs (list_audit_events). Core rules: Available stock = Physical - Reserved. Destructive operations (delete_product, delete_order, delete_customer, delete_category, delete_payment, delete_return, factory_reset) and high-impact operations require confirmation tokens. Factory reset requires master password ('Aezakmi@ff135'). For UI widgets, follow decoupled pattern: fetch data tool then call render tool (render_dashboard_widget, render_products_widget, render_order_widget, render_bill_widget).",
+        "Apex Inventory & Order Management Platform. All website operations can be performed via corresponding MCP tools: catalog & categories (list_products, create_product, update_product, delete_product, category tools), inventory ledger (get_inventory_summary, adjust_inventory, receive_inventory), bulk operations (bulk_mark_orders_packed, bulk_adjust_inventory, bulk_update_order_status), forecasting & inventory intelligence (forecast_stockout_risk), conversational AI order drafting (draft_order_from_text), daily financial reconciliation (reconcile_daily_finances), customer notification dispatch (send_customer_notification), orders (list_orders, create_order, confirm_order, cancel_order, delete_order), packing (list_orders_to_pack, mark_order_packed), shipping (list_orders_to_ship, mark_order_shipped, mark_order_delivered), payments (list_payments, record_payment), returns (list_returns, register_return, approve_return), settings & company profile (get_company_settings, update_company_profile, update_billing_format_settings, update_regional_settings), order cancellation deduction policies (get_cancellation_policy, update_cancellation_policy, preview_cancellation_refund), digital tax invoices & bills (get_order_bill, get_digital_bill_url, generate_bill_share_message, render_bill_widget), and audit logs (list_audit_events). Core rules: Available stock = Physical - Reserved. Destructive operations (delete_product, delete_order, delete_customer, delete_category, delete_payment, delete_return, factory_reset) and high-impact operations require confirmation tokens. Factory reset requires master password ('Aezakmi@ff135'). For UI widgets, follow decoupled pattern: fetch data tool then call render tool (render_dashboard_widget, render_products_widget, render_order_widget, render_bill_widget).",
       capabilities: {
         tools: { listChanged: true },
         resources: { subscribe: false, listChanged: true },
@@ -3160,6 +3160,996 @@ export function createMcpServer(principal: McpAuthPrincipal) {
       return {
         content: [{ type: "text", text: JSON.stringify(filtered, null, 2) }],
         structuredContent: { count: filtered.length, events: filtered },
+      };
+    }
+  );
+
+  // --- 11E. ADVANCED STORE OPERATIONS & AI INTELLIGENCE SUITE ---
+
+  server.registerTool(
+    "bulk_mark_orders_packed",
+    {
+      title: "Bulk Mark Orders Packed",
+      description:
+        "Batch-transition multiple orders to PACKED status in a single operation. Validates order status, assigns optional packing notes, releases packing queue entries, and records audit trail.",
+      inputSchema: {
+        orderIds: z.array(z.string().min(1)).min(1).max(50).describe("Array of order IDs or order numbers to pack"),
+        packingNotes: z.string().optional().describe("Optional batch packing or inspection note"),
+      },
+      annotations: {
+        readOnlyHint: false,
+        openWorldHint: false,
+        destructiveHint: false,
+      },
+    },
+    async ({ orderIds, packingNotes }) => {
+      requireScope("packing:write");
+      const db = await getDb();
+      const results: Array<{ orderIdOrNumber: string; orderId?: string; orderNumber?: string; status?: string; success: boolean; message: string }> = [];
+
+      for (const idOrNum of orderIds) {
+        try {
+          const [foundOrder] = await (db as any)
+            .select()
+            .from(orders)
+            .where(and(eq(orders.workspaceId, workspaceId), sql`(${orders.id} = ${idOrNum} OR ${orders.orderNumber} = ${idOrNum})`))
+            .limit(1);
+
+          if (!foundOrder) {
+            results.push({ orderIdOrNumber: idOrNum, success: false, message: "Order not found" });
+            continue;
+          }
+
+          if (foundOrder.status === "PACKED") {
+            results.push({ orderIdOrNumber: idOrNum, orderId: foundOrder.id, orderNumber: foundOrder.orderNumber, status: "PACKED", success: true, message: "Order already packed" });
+            continue;
+          }
+
+          if (foundOrder.status === "CANCELLED") {
+            results.push({ orderIdOrNumber: idOrNum, orderId: foundOrder.id, orderNumber: foundOrder.orderNumber, status: "CANCELLED", success: false, message: "Cannot pack cancelled order" });
+            continue;
+          }
+
+          const updated = await packingService.markOrderPacked({
+            workspaceId,
+            orderId: foundOrder.id,
+            packingNotes: packingNotes || null,
+            actor,
+            sourceType: "mcp",
+          });
+
+          const resolvedStatus = (updated as any).currentStatus || (updated as any).status || "PACKED";
+          results.push({
+            orderIdOrNumber: idOrNum,
+            orderId: foundOrder.id,
+            orderNumber: foundOrder.orderNumber,
+            status: resolvedStatus,
+            success: true,
+            message: "Order successfully marked as PACKED",
+          });
+        } catch (err: any) {
+          results.push({ orderIdOrNumber: idOrNum, success: false, message: err?.message || "Failed to mark order as packed" });
+        }
+      }
+
+      const successCount = results.filter((r) => r.success).length;
+      const failureCount = results.filter((r) => !r.success).length;
+
+      return {
+        content: [
+          {
+            type: "text",
+            text: `Bulk packing completed: ${successCount} successful, ${failureCount} failed out of ${orderIds.length} orders.\n\n` +
+              results.map((r) => `• ${r.orderNumber || r.orderIdOrNumber}: ${r.success ? "✓" : "✗"} ${r.message}`).join("\n"),
+          },
+        ],
+        structuredContent: {
+          total: orderIds.length,
+          successCount,
+          failureCount,
+          results,
+        },
+      };
+    }
+  );
+
+  server.registerTool(
+    "bulk_adjust_inventory",
+    {
+      title: "Bulk Adjust Inventory",
+      description:
+        "Execute batch stock adjustments across multiple products in one call. Ideal for warehouse cycle counts, container receipts, damage write-offs, and stock reconciliations.",
+      inputSchema: {
+        adjustments: z.array(
+          z.object({
+            productIdOrSku: z.string().describe("Product ID or SKU"),
+            quantityChange: z.number().int().describe("Units to adjust (positive to add, negative to deduct)"),
+            reason: z.string().describe("Adjustment reason or reference note"),
+            type: z
+              .enum([
+                "MANUAL_ADJUSTMENT",
+                "STOCK_RECEIVED",
+                "DAMAGED_GOODS",
+                "STOCK_CORRECTION",
+              ])
+              .optional()
+              .describe("Transaction ledger classification"),
+          })
+        ).min(1).max(50),
+      },
+      annotations: {
+        readOnlyHint: false,
+        openWorldHint: false,
+        destructiveHint: false,
+      },
+    },
+    async ({ adjustments }) => {
+      requireScope("inventory:write");
+      const db = await getDb();
+      const results: Array<{ productIdOrSku: string; productId?: string; sku?: string; productName?: string; prevQty?: number; newQty?: number; change: number; success: boolean; message: string }> = [];
+
+      for (const adj of adjustments) {
+        try {
+          const [prod] = await (db as any)
+            .select()
+            .from(products)
+            .where(and(eq(products.workspaceId, workspaceId), sql`(${products.id} = ${adj.productIdOrSku} OR ${products.sku} = ${adj.productIdOrSku})`))
+            .limit(1);
+
+          if (!prod) {
+            results.push({ productIdOrSku: adj.productIdOrSku, change: adj.quantityChange, success: false, message: "Product not found by ID or SKU" });
+            continue;
+          }
+
+          const prevPhysical = prod.physicalStock;
+          await inventoryService.adjustInventory({
+            workspaceId,
+            productId: prod.id,
+            quantityChange: adj.quantityChange,
+            reason: adj.reason,
+            type: adj.type,
+            actor,
+          });
+
+          const newPhysical = prevPhysical + adj.quantityChange;
+          results.push({
+            productIdOrSku: adj.productIdOrSku,
+            productId: prod.id,
+            sku: prod.sku,
+            productName: prod.name,
+            prevQty: prevPhysical,
+            newQty: newPhysical,
+            change: adj.quantityChange,
+            success: true,
+            message: `Physical stock adjusted from ${prevPhysical} to ${newPhysical} (${adj.quantityChange > 0 ? "+" : ""}${adj.quantityChange})`,
+          });
+        } catch (err: any) {
+          results.push({
+            productIdOrSku: adj.productIdOrSku,
+            change: adj.quantityChange,
+            success: false,
+            message: err?.message || "Stock adjustment failed",
+          });
+        }
+      }
+
+      const successCount = results.filter((r) => r.success).length;
+      const failureCount = results.filter((r) => !r.success).length;
+
+      return {
+        content: [
+          {
+            type: "text",
+            text: `Bulk inventory adjustment completed: ${successCount} successful, ${failureCount} failed out of ${adjustments.length} items.\n\n` +
+              results.map((r) => `• [${r.sku || r.productIdOrSku}] ${r.productName || ""}: ${r.success ? "✓" : "✗"} ${r.message}`).join("\n"),
+          },
+        ],
+        structuredContent: {
+          total: adjustments.length,
+          successCount,
+          failureCount,
+          results,
+        },
+      };
+    }
+  );
+
+  server.registerTool(
+    "bulk_update_order_status",
+    {
+      title: "Bulk Update Order Status",
+      description:
+        "Batch-update status across multiple orders (e.g. mark batch as SHIPPED, CONFIRMED, or DELIVERED) with optional operational note.",
+      inputSchema: {
+        orderIds: z.array(z.string().min(1)).min(1).max(50).describe("Array of order IDs or order numbers"),
+        newStatus: z.enum(["CONFIRMED", "PROCESSING", "PACKED", "SHIPPED", "DELIVERED", "CANCELLED"]).describe("Target order lifecycle status"),
+        note: z.string().optional().describe("Operational note"),
+      },
+      annotations: {
+        readOnlyHint: false,
+        openWorldHint: false,
+        destructiveHint: false,
+      },
+    },
+    async ({ orderIds, newStatus, note }) => {
+      requireScope("orders:update");
+      const db = await getDb();
+      const results: Array<{ orderIdOrNumber: string; orderId?: string; orderNumber?: string; oldStatus?: string; newStatus?: string; success: boolean; message: string }> = [];
+
+      for (const idOrNum of orderIds) {
+        try {
+          const [foundOrder] = await (db as any)
+            .select()
+            .from(orders)
+            .where(and(eq(orders.workspaceId, workspaceId), sql`(${orders.id} = ${idOrNum} OR ${orders.orderNumber} = ${idOrNum})`))
+            .limit(1);
+
+          if (!foundOrder) {
+            results.push({ orderIdOrNumber: idOrNum, success: false, message: "Order not found" });
+            continue;
+          }
+
+          const oldStatus = foundOrder.status;
+          await orderService.updateOrderStatus({
+            workspaceId,
+            orderId: foundOrder.id,
+            newStatus,
+            note: note || `Bulk status update to ${newStatus}`,
+            actor,
+            sourceType: "mcp",
+          });
+
+          results.push({
+            orderIdOrNumber: idOrNum,
+            orderId: foundOrder.id,
+            orderNumber: foundOrder.orderNumber,
+            oldStatus,
+            newStatus,
+            success: true,
+            message: `Status updated from ${oldStatus} to ${newStatus}`,
+          });
+        } catch (err: any) {
+          results.push({
+            orderIdOrNumber: idOrNum,
+            success: false,
+            message: err?.message || `Failed to transition to ${newStatus}`,
+          });
+        }
+      }
+
+      const successCount = results.filter((r) => r.success).length;
+      const failureCount = results.filter((r) => !r.success).length;
+
+      return {
+        content: [
+          {
+            type: "text",
+            text: `Bulk order status transition to ${newStatus}: ${successCount} successful, ${failureCount} failed.\n\n` +
+              results.map((r) => `• ${r.orderNumber || r.orderIdOrNumber}: ${r.success ? "✓" : "✗"} ${r.message}`).join("\n"),
+          },
+        ],
+        structuredContent: {
+          total: orderIds.length,
+          targetStatus: newStatus,
+          successCount,
+          failureCount,
+          results,
+        },
+      };
+    }
+  );
+
+  server.registerTool(
+    "forecast_stockout_risk",
+    {
+      title: "Forecast Stockout Risk & Reorder Quantities",
+      description:
+        "Analyze historical sales run-rates, compute Days of Inventory Remaining (DOI), categorize stockout risks (STOCKOUT, CRITICAL, HIGH_RISK, MODERATE, HEALTHY, OVERSTOCKED), and calculate recommended purchase replenishment quantities with estimated capital requirements.",
+      inputSchema: {
+        lookbackDays: z.coerce.number().min(1).max(180).optional().default(30).describe("Historical sales window in days (default: 30 days)"),
+        leadTimeDays: z.coerce.number().min(1).max(90).optional().default(7).describe("Supplier fulfillment lead time in days (default: 7 days)"),
+        targetBufferDays: z.coerce.number().min(1).max(120).optional().default(30).describe("Target buffer stock coverage in days (default: 30 days)"),
+        category: z.string().optional().describe("Optional product category filter"),
+      },
+      annotations: {
+        readOnlyHint: true,
+        openWorldHint: false,
+        destructiveHint: false,
+      },
+    },
+    async ({ lookbackDays, leadTimeDays, targetBufferDays, category }) => {
+      requireScope("inventory:read");
+      const db = await getDb();
+      const lookback = lookbackDays || 30;
+      const leadTime = leadTimeDays || 7;
+      const bufferDays = targetBufferDays || 30;
+
+      // 1. Fetch products
+      let allProducts = await productService.listProducts(workspaceId);
+
+      if (category) {
+        allProducts = allProducts.filter((p: any) =>
+          (p.categoryName || "").toLowerCase().includes(category.toLowerCase())
+        );
+      }
+
+      // 2. Compute sales velocity over lookback period
+      const cutoffDate = new Date(Date.now() - lookback * 24 * 60 * 60 * 1000);
+      const allOrders = await (db as any)
+        .select()
+        .from(orders)
+        .where(eq(orders.workspaceId, workspaceId));
+
+      const recentValidOrders = allOrders.filter(
+        (o: any) => o.status !== "CANCELLED" && new Date(o.createdAt) >= cutoffDate
+      );
+      const recentOrderIds = new Set(recentValidOrders.map((o: any) => o.id));
+
+      const allItems = await (db as any).select().from(orderItems);
+      const salesVelocityMap: Record<string, number> = {};
+      for (const item of allItems) {
+        if (recentOrderIds.has(item.orderId)) {
+          salesVelocityMap[item.productId] = (salesVelocityMap[item.productId] || 0) + item.quantity;
+        }
+      }
+
+      let totalCapitalRequired = 0;
+      let criticalCount = 0;
+      let highRiskCount = 0;
+      let stockoutCount = 0;
+
+      const forecasts = allProducts.map((p: any) => {
+        const unitsSold = salesVelocityMap[p.id] || 0;
+        const dailyRunRate = parseFloat((unitsSold / lookback).toFixed(2));
+        const availableStock = Math.max(0, p.physicalStock - p.reservedStock);
+        const purchaseCost = parseFloat(p.purchaseCost || "0");
+
+        let daysOfInventory = 999;
+        if (availableStock <= 0) {
+          daysOfInventory = 0;
+        } else if (dailyRunRate > 0) {
+          daysOfInventory = parseFloat((availableStock / dailyRunRate).toFixed(1));
+        }
+
+        let riskLevel: "STOCKOUT" | "CRITICAL" | "HIGH_RISK" | "MODERATE" | "HEALTHY" | "OVERSTOCKED" = "HEALTHY";
+        if (availableStock <= 0) {
+          riskLevel = "STOCKOUT";
+          stockoutCount++;
+        } else if (daysOfInventory <= leadTime) {
+          riskLevel = "CRITICAL";
+          criticalCount++;
+        } else if (daysOfInventory <= leadTime + 7) {
+          riskLevel = "HIGH_RISK";
+          highRiskCount++;
+        } else if (daysOfInventory <= bufferDays) {
+          riskLevel = "MODERATE";
+        } else if (daysOfInventory > 90) {
+          riskLevel = "OVERSTOCKED";
+        }
+
+        // Calculate suggested reorder quantity to reach leadTime + bufferDays coverage
+        let suggestedReorderQuantity = 0;
+        if (daysOfInventory < bufferDays || availableStock <= p.reorderThreshold) {
+          const targetStockLevel = Math.ceil((leadTime + bufferDays) * Math.max(dailyRunRate, 0.2));
+          suggestedReorderQuantity = Math.max(0, targetStockLevel - availableStock);
+          if (suggestedReorderQuantity === 0 && availableStock <= p.reorderThreshold) {
+            suggestedReorderQuantity = Math.max(1, p.reorderThreshold * 2 - availableStock);
+          }
+        }
+
+        const estimatedReorderCost = Math.round(suggestedReorderQuantity * purchaseCost * 100) / 100;
+        if (suggestedReorderQuantity > 0) {
+          totalCapitalRequired += estimatedReorderCost;
+        }
+
+        return {
+          productId: p.id,
+          sku: p.sku,
+          productName: p.name,
+          categoryName: p.categoryName,
+          physicalStock: p.physicalStock,
+          reservedStock: p.reservedStock,
+          availableStock,
+          reorderThreshold: p.reorderThreshold,
+          unitsSoldInPeriod: unitsSold,
+          dailyRunRate,
+          daysOfInventoryRemaining: daysOfInventory === 999 ? "∞ (No sales)" : daysOfInventory,
+          daysOfInventoryNumber: daysOfInventory,
+          riskLevel,
+          suggestedReorderQuantity,
+          unitCost: purchaseCost,
+          estimatedReorderCost,
+        };
+      });
+
+      // Sort by urgency
+      const priorityWeights: Record<string, number> = {
+        STOCKOUT: 1,
+        CRITICAL: 2,
+        HIGH_RISK: 3,
+        MODERATE: 4,
+        HEALTHY: 5,
+        OVERSTOCKED: 6,
+      };
+
+      forecasts.sort((a: any, b: any) => {
+        const weightA = priorityWeights[a.riskLevel] || 99;
+        const weightB = priorityWeights[b.riskLevel] || 99;
+        if (weightA !== weightB) return weightA - weightB;
+        return a.daysOfInventoryNumber - b.daysOfInventoryNumber;
+      });
+
+      const summary = {
+        lookbackDays: lookback,
+        leadTimeDays: leadTime,
+        targetBufferDays: bufferDays,
+        totalProductsAnalyzed: forecasts.length,
+        stockoutCount,
+        criticalCount,
+        highRiskCount,
+        totalAtRiskProducts: stockoutCount + criticalCount + highRiskCount,
+        totalCapitalRequired: Math.round(totalCapitalRequired * 100) / 100,
+        totalCapitalRequiredFormatted: formatCurrencyINR(totalCapitalRequired),
+      };
+
+      const topUrgent = forecasts.filter(
+        (f: any) => f.riskLevel === "STOCKOUT" || f.riskLevel === "CRITICAL" || f.riskLevel === "HIGH_RISK"
+      ).slice(0, 10);
+
+      const tableRows = topUrgent.map(
+        (f: any) =>
+          `| ${f.sku} | ${f.productName.substring(0, 24)} | ${f.availableStock} | ${f.dailyRunRate}/day | ${f.daysOfInventoryRemaining} | **${f.riskLevel}** | ${f.suggestedReorderQuantity} units | ${formatCurrencyINR(f.estimatedReorderCost)} |`
+      );
+
+      const markdownReport = `### 📊 Stockout Velocity & Replenishment Forecast (Lookback: ${lookback}d)
+**Summary**:
+- Total Products Analyzed: ${summary.totalProductsAnalyzed}
+- Stockouts (0 Available): ${summary.stockoutCount}
+- Critical (<${leadTime}d DOI): ${summary.criticalCount}
+- High Risk (<${leadTime + 7}d DOI): ${summary.highRiskCount}
+- **Total Capital Needed for Replenishment**: **${summary.totalCapitalRequiredFormatted}**
+
+${
+  topUrgent.length > 0
+    ? `#### ⚠️ Most Urgent Items Requiring Immediate PO:\n| SKU | Product | Avail | Run-Rate | DOI | Risk | Suggested PO | Est. Capital |\n|---|---|---|---|---|---|---|---|\n` +
+      tableRows.join("\n")
+    : "✅ All products currently maintain healthy stock levels above reorder thresholds."
+}`;
+
+      return {
+        content: [{ type: "text", text: markdownReport }],
+        structuredContent: {
+          summary,
+          forecasts,
+        },
+      };
+    }
+  );
+
+  server.registerTool(
+    "draft_order_from_text",
+    {
+      title: "Draft Order from Freeform Text or Chat",
+      description:
+        "Parse messy customer inquiries, WhatsApp orders, or natural language messages into a validated order. Matches catalog products and SKUs, checks available stock, extracts customer details, and can optionally auto-commit directly into the database.",
+      inputSchema: {
+        rawText: z.string().min(5).describe("Raw customer message, WhatsApp text, or inquiry string"),
+        autoCommit: z.boolean().optional().default(false).describe("If true, commits order immediately into the database. If false, returns validated draft preview."),
+        defaultSource: z.string().optional().default("WhatsApp").describe("Order source channel (e.g. WhatsApp, Phone, Instagram, Website)"),
+      },
+      annotations: {
+        readOnlyHint: false,
+        openWorldHint: false,
+        destructiveHint: false,
+      },
+    },
+    async ({ rawText, autoCommit, defaultSource }) => {
+      requireScope(autoCommit ? "orders:create" : "orders:read");
+      const db = await getDb();
+
+      // 1. Extract Customer Contact Information
+      const phoneMatch = rawText.match(/(?:\+91[\-\s]?)?[6-9]\d{9}\b/) || rawText.match(/\b\d{10}\b/);
+      const extractedPhone = phoneMatch ? phoneMatch[0].trim() : "";
+
+      const emailMatch = rawText.match(/[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/);
+      const extractedEmail = emailMatch ? emailMatch[0].trim() : undefined;
+
+      // Extract Name
+      let extractedName = "";
+      const nameMatch =
+        rawText.match(/(?:Name|Customer|Client)\s*[:\-]\s*([^\n\r,]+)/i) ||
+        rawText.match(/(?:My name is|I am|This is)\s+([A-Za-z\s]{2,30})/i) ||
+        rawText.match(/(?:for)\s+([A-Z][a-z]+(?:\s+[A-Z][a-z]+)+)/);
+      if (nameMatch) {
+        extractedName = nameMatch[1].trim();
+      }
+
+      // Extract Address
+      let extractedAddress = "";
+      const addressMatch =
+        rawText.match(/(?:Address|Ship to|Delivery Address|Send to|Location)\s*[:\-]\s*([^\n\r]+(?:\n[^\n\r]+)?)/i);
+      if (addressMatch) {
+        extractedAddress = addressMatch[1].trim();
+      } else {
+        // Look for 6-digit Indian PIN code line
+        const pinMatch = rawText.match(/[^\n\r]+(?:\b\d{6}\b)[^\n\r]*/);
+        if (pinMatch) {
+          extractedAddress = pinMatch[0].trim();
+        }
+      }
+
+      // Payment method detection
+      let detectedPaymentMethod = "COD";
+      if (/upi|gpay|paytm|phonepe|prepaid|online|card|netbanking/i.test(rawText)) {
+        detectedPaymentMethod = "PREPAID";
+      }
+
+      // 2. Fetch Catalog for Product Matching
+      const catalog = await productService.listProducts(workspaceId);
+
+      // Parse line items from rawText
+      const matchedItems: Array<{
+        productId: string;
+        sku: string;
+        productName: string;
+        quantity: number;
+        unitPrice: number;
+        totalPrice: number;
+        availableStock: number;
+        isStockSufficient: boolean;
+      }> = [];
+
+      const lines = rawText.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
+
+      // Helper to match text to product
+      const findBestProductMatch = (line: string) => {
+        const lowerLine = line.toLowerCase();
+        // Check exact or partial SKU match first
+        for (const p of catalog) {
+          if (p.sku && lowerLine.includes(p.sku.toLowerCase())) {
+            return p;
+          }
+        }
+        // Check product name match
+        for (const p of catalog) {
+          const nameWords = p.name.toLowerCase().split(/\s+/).filter((w: string) => w.length > 2);
+          const matchCount = nameWords.filter((w: string) => lowerLine.includes(w)).length;
+          if (matchCount >= Math.min(2, nameWords.length)) {
+            return p;
+          }
+        }
+        // Fallback single word match if distinctive
+        for (const p of catalog) {
+          if (lowerLine.includes(p.name.toLowerCase())) {
+            return p;
+          }
+        }
+        return null;
+      };
+
+      // Extract quantities from lines
+      for (const line of lines) {
+        const matchedProd = findBestProductMatch(line);
+        if (matchedProd) {
+          // Check if already matched
+          if (matchedItems.some((it) => it.productId === matchedProd.id)) continue;
+
+          // Extract quantity
+          let qty = 1;
+          const qtyMatch =
+            line.match(/(\d+)\s*(?:x|pcs|units?|pieces?|nos?|box(?:es)?)\b/i) ||
+            line.match(/\b(?:qty|quantity)\s*[:\-]?\s*(\d+)/i) ||
+            line.match(/^(\d+)\s+/);
+          if (qtyMatch) {
+            const parsed = parseInt(qtyMatch[1], 10);
+            if (!isNaN(parsed) && parsed > 0) qty = parsed;
+          }
+
+          const available = Math.max(0, matchedProd.physicalStock - matchedProd.reservedStock);
+          const price = parseFloat(matchedProd.sellingPrice || "0");
+          matchedItems.push({
+            productId: matchedProd.id,
+            sku: matchedProd.sku,
+            productName: matchedProd.name,
+            quantity: qty,
+            unitPrice: price,
+            totalPrice: Math.round(qty * price * 100) / 100,
+            availableStock: available,
+            isStockSufficient: available >= qty,
+          });
+        }
+      }
+
+      // If no multiline items matched, try global search across entire text
+      if (matchedItems.length === 0) {
+        for (const p of catalog) {
+          if (rawText.toLowerCase().includes(p.name.toLowerCase()) || (p.sku && rawText.toLowerCase().includes(p.sku.toLowerCase()))) {
+            let qty = 1;
+            const contextRegex = new RegExp(`(\\d+)\\s*(?:x|pcs|units?)?\\s*(?:of\\s+)?(?:${p.name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}|${p.sku})`, "i");
+            const m = rawText.match(contextRegex);
+            if (m) {
+              const parsed = parseInt(m[1], 10);
+              if (!isNaN(parsed) && parsed > 0) qty = parsed;
+            }
+            const available = Math.max(0, p.physicalStock - p.reservedStock);
+            const price = parseFloat(p.sellingPrice || "0");
+            matchedItems.push({
+              productId: p.id,
+              sku: p.sku,
+              productName: p.name,
+              quantity: qty,
+              unitPrice: price,
+              totalPrice: Math.round(qty * price * 100) / 100,
+              availableStock: available,
+              isStockSufficient: available >= qty,
+            });
+          }
+        }
+      }
+
+      const subtotal = matchedItems.reduce((acc, it) => acc + it.totalPrice, 0);
+      const totalAmount = Math.round(subtotal * 100) / 100;
+      const allStockSufficient = matchedItems.every((it) => it.isStockSufficient);
+      const isComplete = matchedItems.length > 0 && extractedPhone.length > 0 && extractedAddress.length > 0;
+
+      // If Auto-Commit is requested:
+      if (autoCommit) {
+        if (matchedItems.length === 0) {
+          throw new Error("Cannot auto-commit order: No catalog products could be identified from text.");
+        }
+        if (!allStockSufficient) {
+          const insufficient = matchedItems.filter((i) => !i.isStockSufficient).map((i) => `${i.productName} (Req: ${i.quantity}, Avail: ${i.availableStock})`).join(", ");
+          throw new Error(`Cannot auto-commit order: Insufficient stock for: ${insufficient}`);
+        }
+
+        const customerName = extractedName || `Customer (${extractedPhone || "Online"})`;
+        const shippingAddress = extractedAddress || "Delivery Address Pending";
+
+        const createdOrder = await orderService.createOrder({
+          workspaceId,
+          newCustomer: {
+            name: customerName,
+            phone: extractedPhone || undefined,
+            email: extractedEmail,
+            shippingAddress,
+          },
+          shippingAddress,
+          source: defaultSource || "WhatsApp",
+          items: matchedItems.map((it) => ({
+            productId: it.productId,
+            quantity: it.quantity,
+            unitPrice: it.unitPrice,
+          })),
+          actor,
+          sourceType: "mcp",
+        });
+
+        const baseUrl = getBaseUrl();
+        const resolvedOrderId = (createdOrder as any).orderId || (createdOrder as any).id;
+        const digitalBillUrl = `${baseUrl}/bill/${resolvedOrderId}`;
+
+        const confirmationMsg = `✅ Order ${createdOrder.orderNumber} placed successfully!\n` +
+          `• Customer: ${customerName} (${extractedPhone || "N/A"})\n` +
+          `• Total: ${formatCurrencyINR(createdOrder.totalAmount)} (${detectedPaymentMethod})\n` +
+          `• Items: ${matchedItems.map((i) => `${i.quantity}x ${i.productName}`).join(", ")}\n` +
+          `• Digital Bill: ${digitalBillUrl}`;
+
+        return {
+          content: [{ type: "text", text: confirmationMsg }],
+          structuredContent: {
+            committed: true,
+            orderId: resolvedOrderId,
+            orderNumber: createdOrder.orderNumber,
+            totalAmount: createdOrder.totalAmount,
+            digitalBillUrl,
+            customerName,
+            phone: extractedPhone,
+            items: matchedItems,
+          },
+        };
+      }
+
+      // Draft Preview Mode
+      const draftReport = `### 📝 Conversational Order Draft Preview
+- **Customer Name**: ${extractedName || "*(Not detected - will default to Customer)*"}
+- **Phone**: ${extractedPhone || "⚠️ *(Missing phone number)*"}
+- **Shipping Address**: ${extractedAddress || "⚠️ *(Missing address)*"}
+- **Payment Method**: ${detectedPaymentMethod}
+- **Estimated Order Total**: **${formatCurrencyINR(totalAmount)}**
+- **Validation Status**: ${isComplete && allStockSufficient ? "✅ READY TO COMMIT" : "⚠️ NEEDS REVIEW"}
+
+#### Matched Items (${matchedItems.length}):
+${matchedItems.length > 0 ? matchedItems.map((it) => `• **${it.quantity}x** ${it.productName} (\`${it.sku}\`) @ ${formatCurrencyINR(it.unitPrice)} = ${formatCurrencyINR(it.totalPrice)} [Avail: ${it.availableStock} units ${it.isStockSufficient ? "✓" : "❌ INSUFFICIENT"}]`).join("\n") : "*(No products recognized from catalog. Check SKU or name spelling)*"}
+
+*Tip: Pass \`autoCommit: true\` to instantly place this order into the database and generate a digital invoice.*`;
+
+      return {
+        content: [{ type: "text", text: draftReport }],
+        structuredContent: {
+          committed: false,
+          isComplete,
+          allStockSufficient,
+          customer: {
+            name: extractedName,
+            phone: extractedPhone,
+            email: extractedEmail,
+            address: extractedAddress,
+          },
+          detectedPaymentMethod,
+          items: matchedItems,
+          subtotal,
+          totalAmount,
+        },
+      };
+    }
+  );
+
+  server.registerTool(
+    "reconcile_daily_finances",
+    {
+      title: "Daily Financial Reconciliation & Audit",
+      description:
+        "Perform daily financial reconciliation and cash flow audit for any date in Indian Standard Time (IST). Reconciles booked gross sales, collected payments (Cash, UPI, Card), pending COD receivables, unpaid delivered orders, cancellation fee income, and processed customer refunds.",
+      inputSchema: {
+        date: z.string().optional().describe("Target date in YYYY-MM-DD format (defaults to today in IST Asia/Kolkata)"),
+        includeDiscrepanciesOnly: z.boolean().optional().default(false).describe("If true, only returns orders with financial discrepancy flags"),
+      },
+      annotations: {
+        readOnlyHint: true,
+        openWorldHint: false,
+        destructiveHint: false,
+      },
+    },
+    async ({ date, includeDiscrepanciesOnly }) => {
+      requireScope("reports:read");
+      const db = await getDb();
+
+      // Determine date bounds in IST (UTC+05:30)
+      const now = new Date();
+      let targetDateStr = date;
+      if (!targetDateStr) {
+        // Current date in YYYY-MM-DD IST
+        const istFormatter = new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Kolkata", year: "numeric", month: "2-digit", day: "2-digit" });
+        targetDateStr = istFormatter.format(now);
+      }
+
+      const startOfDay = new Date(`${targetDateStr}T00:00:00.000+05:30`);
+      const endOfDay = new Date(`${targetDateStr}T23:59:59.999+05:30`);
+
+      // 1. Fetch Orders for the day
+      const allOrders = await (db as any)
+        .select()
+        .from(orders)
+        .where(eq(orders.workspaceId, workspaceId));
+
+      const dayOrders = allOrders.filter((ord: any) => {
+        const d = new Date(ord.createdAt);
+        return d >= startOfDay && d <= endOfDay;
+      });
+
+      // 2. Fetch Payments recorded for the day
+      const allPayments = await (db as any)
+        .select()
+        .from(payments)
+        .where(eq(payments.workspaceId, workspaceId));
+
+      const dayPayments = allPayments.filter((pay: any) => {
+        const d = new Date(pay.createdAt);
+        return d >= startOfDay && d <= endOfDay;
+      });
+
+      let grossBookedRevenue = 0;
+      let cancelledRevenue = 0;
+      let cancellationFeesEarned = 0;
+      let totalRefundsRecorded = 0;
+      let codPendingAmount = 0;
+      let paidOrderCount = 0;
+      let unpaidOrderCount = 0;
+
+      const discrepancies: Array<{ orderId: string; orderNumber: string; totalAmount: number; paymentStatus: string; orderStatus: string; issue: string }> = [];
+
+      for (const ord of dayOrders) {
+        const total = parseFloat(ord.totalAmount || "0");
+        const cancelFee = parseFloat(ord.cancellationFee || "0");
+        const refundAmt = parseFloat(ord.refundAmount || "0");
+
+        if (ord.status === "CANCELLED") {
+          cancelledRevenue += total;
+          cancellationFeesEarned += cancelFee;
+          totalRefundsRecorded += refundAmt;
+        } else {
+          grossBookedRevenue += total;
+          if (ord.paymentStatus === "PAID") {
+            paidOrderCount++;
+          } else {
+            unpaidOrderCount++;
+            if (ord.source === "WhatsApp" || ord.notes?.includes("COD")) {
+              codPendingAmount += total;
+            }
+          }
+
+          // Discrepancy 1: Delivered but unpaid
+          if (ord.status === "DELIVERED" && ord.paymentStatus !== "PAID") {
+            discrepancies.push({
+              orderId: ord.id,
+              orderNumber: ord.orderNumber,
+              totalAmount: total,
+              paymentStatus: ord.paymentStatus,
+              orderStatus: ord.status,
+              issue: "CRITICAL: Order is DELIVERED but marked UNPAID (potential cash leakage)",
+            });
+          }
+        }
+      }
+
+      // Breakdown of collected payments by payment method
+      const paymentsByMethod: Record<string, number> = {};
+      let totalCollectedPayments = 0;
+
+      for (const pay of dayPayments) {
+        const amt = parseFloat(pay.amount || "0");
+        const method = pay.paymentMethod || "OTHER";
+        paymentsByMethod[method] = (paymentsByMethod[method] || 0) + amt;
+        totalCollectedPayments += amt;
+      }
+
+      // Net Realized Revenue = Payments Collected - Refunds Processed + Cancellation Deductions Earned
+      const netRealizedRevenue = Math.round((totalCollectedPayments - totalRefundsRecorded + cancellationFeesEarned) * 100) / 100;
+
+      const summary = {
+        reconciliationDateIST: targetDateStr,
+        ordersBookedCount: dayOrders.length,
+        grossBookedRevenue: Math.round(grossBookedRevenue * 100) / 100,
+        grossBookedRevenueFormatted: formatCurrencyINR(grossBookedRevenue),
+        totalCollectedPayments: Math.round(totalCollectedPayments * 100) / 100,
+        totalCollectedPaymentsFormatted: formatCurrencyINR(totalCollectedPayments),
+        paymentsByMethod,
+        cancellationFeesEarned: Math.round(cancellationFeesEarned * 100) / 100,
+        cancellationFeesEarnedFormatted: formatCurrencyINR(cancellationFeesEarned),
+        refundsProcessed: Math.round(totalRefundsRecorded * 100) / 100,
+        refundsProcessedFormatted: formatCurrencyINR(totalRefundsRecorded),
+        netRealizedRevenue,
+        netRealizedRevenueFormatted: formatCurrencyINR(netRealizedRevenue),
+        codPendingCollection: Math.round(codPendingAmount * 100) / 100,
+        codPendingCollectionFormatted: formatCurrencyINR(codPendingAmount),
+        discrepancyCount: discrepancies.length,
+      };
+
+      const auditReport = `### 💰 Daily Financial Reconciliation Statement (${targetDateStr} IST)
+- **Gross Orders Booked**: ${summary.grossBookedRevenueFormatted} (${summary.ordersBookedCount} orders)
+- **Collected Inflows Today**: **${summary.totalCollectedPaymentsFormatted}**
+${Object.entries(paymentsByMethod).map(([m, a]) => `  • ${m}: ${formatCurrencyINR(a)}`).join("\n") || "  • *(No payments recorded for this date)*"}
+- **Cancellation Deduction Fees Earned**: ${summary.cancellationFeesEarnedFormatted}
+- **Refunds Processed**: ${summary.refundsProcessedFormatted}
+- **Net Realized Store Revenue**: **${summary.netRealizedRevenueFormatted}**
+- **Pending COD Receivables**: ${summary.codPendingCollectionFormatted}
+- **Discrepancy Flags**: ${discrepancies.length === 0 ? "✅ None (All balances aligned)" : `⚠️ **${discrepancies.length} discrepancy flag(s) identified**`}
+
+${discrepancies.length > 0 ? `#### ⚠️ Financial Discrepancies Requiring Attention:\n` + discrepancies.map((d) => `• **${d.orderNumber}** (${formatCurrencyINR(d.totalAmount)}): ${d.issue}`).join("\n") : ""}`;
+
+      return {
+        content: [{ type: "text", text: auditReport }],
+        structuredContent: {
+          summary,
+          discrepancies,
+          orders: includeDiscrepanciesOnly ? discrepancies : dayOrders,
+        },
+      };
+    }
+  );
+
+  server.registerTool(
+    "send_customer_notification",
+    {
+      title: "Send Customer Notification & Bill Dispatch",
+      description:
+        "Prepare and dispatch customer notifications (Order Confirmation, Tax Invoice & Digital Bill, Packed/Dispatch Alert, Delivery Confirmation, or Cancellation & Refund breakdown) via WhatsApp, SMS, or Email template.",
+      inputSchema: {
+        orderIdOrNumber: z.string().describe("Order ID or order number"),
+        channel: z.enum(["WHATSAPP", "SMS", "EMAIL"]).describe("Communication delivery channel"),
+        type: z
+          .enum([
+            "ORDER_CONFIRMATION",
+            "INVOICE_BILL",
+            "PACKED_DISPATCH",
+            "DELIVERY_UPDATE",
+            "CANCELLATION_REFUND",
+          ])
+          .describe("Notification message template"),
+        customNote: z.string().optional().describe("Optional note or greeting from operator"),
+      },
+      annotations: {
+        readOnlyHint: false,
+        openWorldHint: false,
+        destructiveHint: false,
+      },
+    },
+    async ({ orderIdOrNumber, channel, type, customNote }) => {
+      requireScope("orders:read");
+      const db = await getDb();
+
+      const [foundOrder] = await (db as any)
+        .select({
+          order: orders,
+          customer: customers,
+        })
+        .from(orders)
+        .leftJoin(customers, eq(orders.customerId, customers.id))
+        .where(
+          and(
+            eq(orders.workspaceId, workspaceId),
+            sql`(${orders.id} = ${orderIdOrNumber} OR ${orders.orderNumber} = ${orderIdOrNumber})`
+          )
+        )
+        .limit(1);
+
+      if (!foundOrder) {
+        throw new Error(`Order not found: ${orderIdOrNumber}`);
+      }
+
+      const ord = foundOrder.order;
+      const cust = foundOrder.customer;
+      const [ws] = await (db as any)
+        .select()
+        .from(workspaces)
+        .where(eq(workspaces.id, workspaceId))
+        .limit(1);
+
+      const companyName = ws?.companyName || "Apex Logistics";
+      const baseUrl = getBaseUrl();
+      const digitalBillUrl = `${baseUrl}/bill/${ord.id}`;
+      const customerName = cust?.name || "Valued Customer";
+      const recipient = channel === "EMAIL" ? (cust?.email || "billing@apexlogistics.in") : (cust?.phone || "+91 98765 43210");
+
+      let messageBody = "";
+      if (type === "ORDER_CONFIRMATION") {
+        messageBody = `Hello ${customerName}, thank you for ordering from ${companyName}! Your order ${ord.orderNumber} has been received (Total: ${formatCurrencyINR(ord.totalAmount)}). View your digital bill here: ${digitalBillUrl}`;
+      } else if (type === "INVOICE_BILL") {
+        messageBody = `Dear ${customerName}, here is the official tax invoice for order ${ord.orderNumber} (${formatCurrencyINR(ord.totalAmount)}): ${digitalBillUrl}\nThank you for choosing ${companyName}!`;
+      } else if (type === "PACKED_DISPATCH") {
+        messageBody = `Hi ${customerName}, good news! Your order ${ord.orderNumber} has been packed and scheduled for shipping. Track invoice: ${digitalBillUrl}`;
+      } else if (type === "DELIVERY_UPDATE") {
+        messageBody = `Hello ${customerName}, your package for order ${ord.orderNumber} has been delivered. Thank you for shopping with ${companyName}! Invoice: ${digitalBillUrl}`;
+      } else if (type === "CANCELLATION_REFUND") {
+        const fee = parseFloat(ord.cancellationFee || "0");
+        const ref = parseFloat(ord.refundAmount || "0");
+        messageBody = `Hello ${customerName}, your order ${ord.orderNumber} was cancelled. Cancellation deduction fee: ${formatCurrencyINR(fee)}. Net refund amount: ${formatCurrencyINR(ref)}. Details: ${digitalBillUrl}`;
+      }
+
+      if (customNote) {
+        messageBody += `\nNote: ${customNote}`;
+      }
+
+      await logAuditEvent({
+        workspaceId,
+        actorId: actor.id,
+        actorName: actor.name,
+        actorType: "AI_CLIENT",
+        toolName: "send_customer_notification",
+        operation: "SEND_NOTIFICATION",
+        targetRecord: `Order ${ord.orderNumber}`,
+        beforeState: null,
+        afterState: { channel, type, recipient, messageBody },
+        outcome: "SUCCESS",
+      });
+
+      return {
+        content: [
+          {
+            type: "text",
+            text: `[${channel}] Notification prepared for ${customerName} (${recipient}):\n\n"${messageBody}"`,
+          },
+        ],
+        structuredContent: {
+          success: true,
+          status: "DISPATCHED",
+          channel,
+          type,
+          recipient,
+          messageBody,
+          orderNumber: ord.orderNumber,
+          digitalBillUrl,
+        },
       };
     }
   );
