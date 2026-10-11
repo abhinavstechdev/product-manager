@@ -12,7 +12,6 @@ import {
   ShieldCheck,
   Sparkles,
   AlertCircle,
-  KeyRound,
   CheckCircle2,
 } from "lucide-react";
 
@@ -77,12 +76,6 @@ function LoginForm() {
     }
   };
 
-  const autofillCredentials = () => {
-    setUsername("seveton");
-    setPassword("Aezakmi@ff135");
-    setErrorMessage("");
-  };
-
   return (
     <div className="min-h-screen w-screen flex items-center justify-center p-4 sm:p-6 bg-slate-950 text-slate-100 relative overflow-hidden select-none">
       {/* Background ambient lighting effects */}
@@ -121,23 +114,6 @@ function LoginForm() {
               </div>
             </div>
           )}
-
-          {/* Quick Credential Hint Banner */}
-          <div className="bg-slate-950/70 border border-slate-800 rounded-xl p-3 flex items-center justify-between gap-2 text-xs">
-            <div className="flex items-center gap-2 text-slate-400">
-              <KeyRound className="w-3.5 h-3.5 text-amber-400 shrink-0" />
-              <span>
-                Account: <strong className="text-slate-200">seveton</strong>
-              </span>
-            </div>
-            <button
-              type="button"
-              onClick={autofillCredentials}
-              className="text-[11px] font-medium text-indigo-400 hover:text-indigo-300 bg-indigo-500/10 hover:bg-indigo-500/20 px-2 py-1 rounded border border-indigo-500/30 transition cursor-pointer"
-            >
-              Fill Credentials
-            </button>
-          </div>
 
           {/* Error Banner */}
           {errorMessage && (
