@@ -26,6 +26,10 @@ import {
   Sparkles,
   Crop,
   Maximize2,
+  Plug,
+  KeyRound,
+  Copy,
+  ExternalLink,
 } from "lucide-react";
 import { useBranding } from "@/components/BrandingContext";
 
@@ -34,6 +38,7 @@ export default function SettingsPage() {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [message, setMessage] = useState<{ type: "success" | "error"; text: string } | null>(null);
+  const [copiedDevToken, setCopiedDevToken] = useState(false);
 
   interface LogoMeta {
     width: number;
@@ -905,6 +910,53 @@ export default function SettingsPage() {
                 className="w-full px-3.5 py-2.5 rounded-xl bg-slate-950 border border-slate-800 text-white text-xs placeholder:text-slate-600 focus:outline-none focus:border-violet-500 transition"
               />
             </div>
+          </div>
+        </div>
+
+        {/* Section 5: Model Context Protocol (MCP) API Token & Remote Access */}
+        <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6 sm:p-7 space-y-4 shadow-xl">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-slate-800/80 pb-3">
+            <div className="flex items-center gap-2 text-indigo-400 text-xs font-bold uppercase tracking-wider">
+              <Plug className="w-4 h-4" />
+              <span>Model Context Protocol (MCP) Developer Access</span>
+            </div>
+            <Link
+              href="/mcp-connections"
+              className="text-xs text-indigo-400 hover:text-indigo-300 flex items-center gap-1 font-semibold"
+            >
+              <span>Full MCP Server Guide &amp; Tools</span>
+              <ExternalLink className="w-3.5 h-3.5" />
+            </Link>
+          </div>
+
+          <div className="p-4 bg-slate-950/70 rounded-xl border border-slate-800 space-y-2.5">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+              <div className="flex items-center gap-2 flex-wrap">
+                <KeyRound className="w-4 h-4 text-emerald-400" />
+                <span className="text-xs font-bold text-white">Pre-Shared Bearer Token (Direct Access)</span>
+                <span className="text-[10px] bg-emerald-500/20 text-emerald-300 font-mono px-2 py-0.5 rounded border border-emerald-500/30 font-semibold">
+                  Permanent • Full OWNER Scopes
+                </span>
+              </div>
+              <button
+                type="button"
+                onClick={() => {
+                  navigator.clipboard.writeText("Bearer mcp_dev_token_apex");
+                  setCopiedDevToken(true);
+                  setTimeout(() => setCopiedDevToken(false), 2000);
+                }}
+                className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-slate-900 hover:bg-slate-800 text-slate-200 border border-slate-700 text-xs font-semibold cursor-pointer self-start sm:self-auto transition"
+              >
+                {copiedDevToken ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5" />}
+                <span>{copiedDevToken ? "Copied!" : "Copy Bearer Token"}</span>
+              </button>
+            </div>
+            <div className="p-2.5 bg-slate-900 rounded-lg border border-slate-800 font-mono text-xs text-indigo-300 select-all">
+              Authorization: Bearer mcp_dev_token_apex
+            </div>
+            <p className="text-[11px] text-slate-400">
+              No generation needed — this pre-shared development token is permanently active on your workspace with full access to all 72+ catalog, inventory, and order MCP tools.
+            </p>
           </div>
         </div>
 

@@ -7,6 +7,7 @@ import { Plug, Copy, Check, Sparkles, ShieldCheck, Terminal, Bot, ExternalLink, 
 export function McpConnectionsPage() {
   const [copiedEndpoint, setCopiedEndpoint] = useState(false);
   const [copiedConfig, setCopiedConfig] = useState(false);
+  const [copiedDevToken, setCopiedDevToken] = useState(false);
   const [activeTab, setActiveTab] = useState<"streamable" | "oauth" | "reset">("streamable");
   const [resetPassword, setResetPassword] = useState("");
   const [resetLoading, setResetLoading] = useState(false);
@@ -146,6 +147,32 @@ export function McpConnectionsPage() {
             <span className="text-slate-400 text-[10px] uppercase font-bold block">Available Tools</span>
             <span className="font-mono text-purple-400 font-bold">72 Production Tools</span>
           </div>
+        </div>
+
+        {/* Pre-Shared Bearer Token (Direct Access) */}
+        <div className="p-4 rounded-2xl bg-slate-950/80 border border-slate-800 space-y-2.5">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+            <div className="flex items-center gap-2 flex-wrap">
+              <KeyRound className="w-4 h-4 text-emerald-400" />
+              <span className="text-xs font-bold text-white">Pre-Shared Bearer Token (Direct Access)</span>
+              <span className="text-[10px] bg-emerald-500/20 text-emerald-300 font-mono px-2 py-0.5 rounded border border-emerald-500/30 font-semibold">
+                Permanent • OWNER Role
+              </span>
+            </div>
+            <button
+              onClick={() => copyToClipboard("Bearer mcp_dev_token_apex", setCopiedDevToken)}
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-slate-900 hover:bg-slate-800 text-slate-200 border border-slate-700 text-xs font-semibold cursor-pointer self-start sm:self-auto transition"
+            >
+              {copiedDevToken ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5" />}
+              <span>{copiedDevToken ? "Copied Token!" : "Copy Bearer Token"}</span>
+            </button>
+          </div>
+          <div className="p-2.5 bg-slate-900 rounded-xl border border-slate-800 font-mono text-xs text-indigo-300 break-all select-all flex items-center justify-between">
+            <span>Authorization: Bearer mcp_dev_token_apex</span>
+          </div>
+          <p className="text-[11px] text-slate-400">
+            No token generation needed — this pre-shared token is permanently active with full OWNER permissions across all 72+ MCP tools. Use it in Postman, cURL, Claude Desktop, or Gemini.
+          </p>
         </div>
       </div>
 
