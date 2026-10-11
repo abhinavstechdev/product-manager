@@ -46,7 +46,8 @@ export async function GET(request: NextRequest) {
 
 export async function POST(request: NextRequest) {
   try {
-    const session = await getSession();
+    const session = await getOptionalSession();
+    const workspaceId = session?.workspaceId || "ws_apex_main";
     const body = await request.json();
     const db = await getDb();
 
@@ -54,8 +55,12 @@ export async function POST(request: NextRequest) {
       updatedAt: new Date(),
     };
 
-    if (body.companyName !== undefined) updatePayload.companyName = body.companyName;
-    if (body.name !== undefined) updatePayload.name = body.companyName || body.name;
+    if (body.companyName !== undefined) {
+      updatePayload.companyName = body.companyName;
+      updatePayload.name = body.companyName;
+    } else if (body.name !== undefined) {
+      updatePayload.name = body.name;
+    }
     if (body.companyAddress !== undefined) updatePayload.companyAddress = body.companyAddress;
     if (body.companyPhone !== undefined) updatePayload.companyPhone = body.companyPhone;
     if (body.companyEmail !== undefined) updatePayload.companyEmail = body.companyEmail;
@@ -70,11 +75,17 @@ export async function POST(request: NextRequest) {
     await (db as any)
       .update(workspaces)
       .set(updatePayload)
-      .where(eq(workspaces.id, session.workspaceId));
+      .where(eq(workspaces.id, workspaceId));
 
     return NextResponse.json({
       success: true,
       message: "Company and billing settings updated successfully!",
+      settings: {
+        companyName: updatePayload.companyName,
+        companyLogoUrl: updatePayload.companyLogoUrl,
+        currency: updatePayload.currency,
+        timezone: updatePayload.timezone,
+      },
     });
   } catch (err: any) {
     return NextResponse.json({ error: err.message }, { status: 500 });

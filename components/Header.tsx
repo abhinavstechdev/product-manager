@@ -2,6 +2,7 @@
 
 import React, { useState, useEffect } from "react";
 import { Building2, ShieldCheck, Bell, Sparkles, LogOut, Menu } from "lucide-react";
+import { useBranding } from "./BrandingContext";
 
 export function Header({
   onNewOrder,
@@ -12,6 +13,7 @@ export function Header({
   onNewProduct?: () => void;
   onMenuClick?: () => void;
 }) {
+  const { branding } = useBranding();
   const [user, setUser] = useState<{
     name: string;
     username?: string;
@@ -61,12 +63,20 @@ export function Header({
         )}
 
         <div className="flex items-center gap-1.5 sm:gap-2 bg-slate-900 border border-slate-800 px-2.5 sm:px-3 py-1.5 rounded-xl">
-          <Building2 className="w-4 h-4 text-indigo-400 shrink-0" />
-          <span className="text-xs font-semibold text-slate-200 truncate max-w-[120px] sm:max-w-none">
-            Apex Logistics
+          {branding.logoUrl ? (
+            <img
+              src={branding.logoUrl}
+              alt={branding.companyName}
+              className="w-4 h-4 object-contain rounded"
+            />
+          ) : (
+            <Building2 className="w-4 h-4 text-indigo-400 shrink-0" />
+          )}
+          <span className="text-xs font-semibold text-slate-200 truncate max-w-[140px] sm:max-w-xs">
+            {branding.companyName || "Apex Logistics"}
           </span>
           <span className="text-[10px] bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 px-1.5 py-0.5 rounded font-mono shrink-0">
-            ₹ INR
+            {branding.currency || "INR"}
           </span>
         </div>
 

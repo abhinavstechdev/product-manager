@@ -2,6 +2,7 @@
 
 import React, { useState, useEffect, Suspense } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
+import { useBranding } from "@/components/BrandingContext";
 import {
   Boxes,
   Lock,
@@ -16,6 +17,7 @@ import {
 } from "lucide-react";
 
 function LoginForm() {
+  const { branding } = useBranding();
   const router = useRouter();
   const searchParams = useSearchParams();
   const returnTo = searchParams.get("return_to") || searchParams.get("returnTo") || "/";
@@ -88,19 +90,29 @@ function LoginForm() {
         <div className="bg-slate-900/80 backdrop-blur-xl border border-slate-800 rounded-2xl shadow-2xl p-7 sm:p-9 space-y-6">
           {/* Brand header */}
           <div className="text-center space-y-2">
-            <div className="inline-flex items-center justify-center w-12 h-12 rounded-xl bg-gradient-to-tr from-indigo-600 via-indigo-500 to-emerald-400 text-white shadow-lg shadow-indigo-500/25 mb-1">
-              <Boxes className="w-6 h-6" />
-            </div>
+            {branding.logoUrl ? (
+              <div className="inline-flex items-center justify-center p-2 rounded-2xl bg-white border border-slate-200 shadow-lg mb-1">
+                <img
+                  src={branding.logoUrl}
+                  alt={branding.companyName}
+                  className="h-10 max-w-[140px] object-contain"
+                />
+              </div>
+            ) : (
+              <div className="inline-flex items-center justify-center w-12 h-12 rounded-xl bg-gradient-to-tr from-indigo-600 via-indigo-500 to-emerald-400 text-white shadow-lg shadow-indigo-500/25 mb-1">
+                <Boxes className="w-6 h-6" />
+              </div>
+            )}
             <div className="flex items-center justify-center gap-2">
               <h1 className="text-xl font-bold tracking-tight text-white">
-                Apex Logistics
+                {branding.companyName || "Apex Logistics"}
               </h1>
               <span className="text-[10px] font-mono font-semibold bg-indigo-500/20 text-indigo-300 border border-indigo-500/30 px-1.5 py-0.5 rounded">
                 PRO
               </span>
             </div>
             <p className="text-xs text-slate-400">
-              AI Inventory, Order Operations & MCP Hub
+              AI Inventory, Order Operations &amp; MCP Hub
             </p>
           </div>
 

@@ -3,6 +3,7 @@
 import React from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
+import { useBranding } from "./BrandingContext";
 import {
   LayoutDashboard,
   Package,
@@ -40,24 +41,33 @@ const navigationItems = [
 
 export function Sidebar() {
   const pathname = usePathname();
+  const { branding } = useBranding();
 
   return (
     <aside className="hidden md:flex w-64 bg-slate-950 border-r border-slate-800/80 flex-col justify-between shrink-0 select-none">
       <div className="flex-1 overflow-y-auto">
         {/* Brand header */}
-        <div className="h-16 flex items-center px-6 border-b border-slate-800/80 gap-3 sticky top-0 bg-slate-950 z-10">
-          <div className="w-9 h-9 rounded-xl bg-gradient-to-tr from-indigo-600 via-indigo-500 to-emerald-400 flex items-center justify-center text-white shadow-lg shadow-indigo-500/20">
-            <Boxes className="w-5 h-5" />
-          </div>
-          <div>
+        <div className="h-16 flex items-center px-5 border-b border-slate-800/80 gap-3 sticky top-0 bg-slate-950 z-10">
+          {branding.logoUrl ? (
+            <img
+              src={branding.logoUrl}
+              alt={branding.companyName}
+              className="w-9 h-9 object-contain rounded-xl bg-slate-900 border border-slate-800 p-1 shrink-0"
+            />
+          ) : (
+            <div className="w-9 h-9 rounded-xl bg-gradient-to-tr from-indigo-600 via-indigo-500 to-emerald-400 flex items-center justify-center text-white shadow-lg shadow-indigo-500/20 shrink-0 font-bold text-xs">
+              {branding.companyName ? branding.companyName.slice(0, 2).toUpperCase() : "AP"}
+            </div>
+          )}
+          <div className="min-w-0 flex-1">
             <div className="font-bold text-slate-100 tracking-tight text-sm flex items-center gap-1.5">
-              Apex Logistics
-              <span className="text-[10px] bg-indigo-500/20 text-indigo-300 font-mono px-1.5 py-0.5 rounded border border-indigo-500/30">
+              <span className="truncate max-w-[125px]">{branding.companyName || "Apex Logistics"}</span>
+              <span className="text-[10px] bg-indigo-500/20 text-indigo-300 font-mono px-1.5 py-0.5 rounded border border-indigo-500/30 shrink-0">
                 PRO
               </span>
             </div>
-            <div className="text-[11px] text-slate-400 font-medium">
-              AI &amp; Manual Inventory
+            <div className="text-[11px] text-slate-400 font-medium truncate">
+              Operations Hub
             </div>
           </div>
         </div>
@@ -140,6 +150,7 @@ export function MobileDrawer({
   onClose: () => void;
 }) {
   const pathname = usePathname();
+  const { branding } = useBranding();
 
   if (!isOpen) return null;
 
@@ -157,11 +168,19 @@ export function MobileDrawer({
         <div className="flex-1 overflow-y-auto">
           {/* Header */}
           <div className="h-16 flex items-center justify-between px-5 border-b border-slate-800 sticky top-0 bg-slate-950 z-10">
-            <div className="flex items-center gap-2.5">
-              <div className="w-8 h-8 rounded-xl bg-gradient-to-tr from-indigo-600 via-indigo-500 to-emerald-400 flex items-center justify-center text-white shadow-md">
-                <Boxes className="w-4 h-4" />
-              </div>
-              <span className="font-bold text-white text-sm">Apex Logistics</span>
+            <div className="flex items-center gap-2.5 min-w-0 flex-1">
+              {branding.logoUrl ? (
+                <img
+                  src={branding.logoUrl}
+                  alt={branding.companyName}
+                  className="w-8 h-8 object-contain rounded-xl bg-slate-900 border border-slate-800 p-0.5 shrink-0"
+                />
+              ) : (
+                <div className="w-8 h-8 rounded-xl bg-gradient-to-tr from-indigo-600 via-indigo-500 to-emerald-400 flex items-center justify-center text-white shadow-md font-bold text-xs shrink-0">
+                  {branding.companyName ? branding.companyName.slice(0, 2).toUpperCase() : "AP"}
+                </div>
+              )}
+              <span className="font-bold text-white text-sm truncate mr-2">{branding.companyName || "Apex Logistics"}</span>
             </div>
 
             <button

@@ -451,7 +451,7 @@ function BillContent() {
               {company.footerNotes}
             </p>
             <div className="flex flex-wrap items-center justify-between gap-2 pt-3 text-[9px] text-slate-400">
-              <span>Apex Logistics Platform • Computer-generated digital invoice • Verified IST</span>
+              <span>{company.name} Platform • Computer-generated digital invoice • Verified IST</span>
               <a href={company.website} target="_blank" rel="noopener noreferrer" className="hover:underline">
                 {company.website}
               </a>

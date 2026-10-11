@@ -2,6 +2,7 @@
 
 import React, { useState, useEffect } from "react";
 import { X, Printer, PackageCheck } from "lucide-react";
+import { useBranding } from "./BrandingContext";
 
 interface PackingSlipData {
   orderNumber: string;
@@ -29,6 +30,7 @@ export function PackingSlipModal({
   isOpen: boolean;
   onClose: () => void;
 }) {
+  const { branding } = useBranding();
   const [data, setData] = useState<PackingSlipData | null>(null);
   const [loading, setLoading] = useState(false);
 
@@ -89,7 +91,7 @@ export function PackingSlipModal({
                   </div>
                 </div>
                 <div className="text-right">
-                  <div className="font-bold text-xs text-indigo-400">Apex Logistics & Retail</div>
+                  <div className="font-bold text-xs text-indigo-400">{branding.companyName || "Apex Logistics"}</div>
                   <div className="text-[11px] text-slate-400">Fulfillment Hub 01</div>
                 </div>
               </div>

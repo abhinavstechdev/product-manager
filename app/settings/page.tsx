@@ -27,8 +27,10 @@ import {
   Crop,
   Maximize2,
 } from "lucide-react";
+import { useBranding } from "@/components/BrandingContext";
 
 export default function SettingsPage() {
+  const { updateBranding } = useBranding();
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [message, setMessage] = useState<{ type: "success" | "error"; text: string } | null>(null);
@@ -390,7 +392,12 @@ export default function SettingsPage() {
       if (!res.ok) {
         setMessage({ type: "error", text: data.error || "Failed to save settings." });
       } else {
-        setMessage({ type: "success", text: "Settings saved successfully! Bills and invoices will now reflect these changes." });
+        setMessage({ type: "success", text: "Settings saved successfully! Website name, branding, and billing invoices have now been updated." });
+        updateBranding({
+          companyName: form.companyName,
+          logoUrl: form.companyLogoUrl,
+          currency: form.currency,
+        });
       }
     } catch (err: any) {
       setMessage({ type: "error", text: err.message || "Network error saving settings." });
