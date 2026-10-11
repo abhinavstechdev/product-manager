@@ -2,28 +2,45 @@
 
 import React, { useState } from "react";
 import { usePathname } from "next/navigation";
-import { Sidebar } from "./Sidebar";
+import { Sidebar, MobileDrawer, MobileBottomNav } from "./Sidebar";
 import { Header } from "./Header";
 import { OrderCreateModal } from "./OrderCreateModal";
 
 export function DashboardShell({ children }: { children: React.ReactNode }) {
   const [isOrderModalOpen, setIsOrderModalOpen] = useState(false);
+  const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
   const pathname = usePathname();
 
   // If on login, OAuth consent, or digital bill screens, render clean standalone view
   if (pathname?.startsWith("/login") || pathname?.startsWith("/oauth") || pathname?.startsWith("/bill")) {
-    return <main className="min-h-screen w-screen bg-slate-950 text-slate-100">{children}</main>;
+    return <main className="min-h-screen w-full bg-slate-950 text-slate-100">{children}</main>;
   }
 
   return (
-    <div className="flex h-screen w-screen overflow-hidden bg-slate-950 text-slate-100 font-sans">
+    <div className="flex h-screen w-full overflow-hidden bg-slate-950 text-slate-100 font-sans">
+      {/* Desktop Sidebar */}
       <Sidebar />
-      <div className="flex-1 flex flex-col min-w-0 overflow-hidden">
-        <Header onNewOrder={() => setIsOrderModalOpen(true)} />
-        <main className="flex-1 overflow-y-auto p-6 md:p-8 space-y-8 bg-slate-950/50">
+
+      {/* Mobile Slide-out Drawer */}
+      <MobileDrawer
+        isOpen={isMobileMenuOpen}
+        onClose={() => setIsMobileMenuOpen(false)}
+      />
+
+      <div className="flex-1 flex flex-col min-w-0 overflow-hidden w-full">
+        <Header
+          onNewOrder={() => setIsOrderModalOpen(true)}
+          onMenuClick={() => setIsMobileMenuOpen(true)}
+        />
+        <main className="flex-1 overflow-y-auto p-4 sm:p-6 md:p-8 space-y-6 sm:space-y-8 bg-slate-950/50 pb-24 md:pb-8 w-full max-w-full">
           {children}
         </main>
       </div>
+
+      {/* Mobile Bottom Navigation Bar */}
+      <MobileBottomNav
+        onOpenMenu={() => setIsMobileMenuOpen(true)}
+      />
 
       <OrderCreateModal
         isOpen={isOrderModalOpen}

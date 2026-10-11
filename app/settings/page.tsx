@@ -387,11 +387,11 @@ export default function SettingsPage() {
         </div>
 
         {/* Submit Button */}
-        <div className="flex items-center justify-end gap-3 pt-2">
+        <div className="flex items-center justify-end pt-2 pb-6">
           <button
             type="submit"
             disabled={saving}
-            className="flex items-center gap-2 px-6 py-2.5 rounded-xl bg-gradient-to-r from-indigo-600 to-emerald-600 hover:from-indigo-500 hover:to-emerald-500 text-white text-xs font-bold shadow-lg shadow-indigo-600/25 transition cursor-pointer disabled:opacity-60"
+            className="w-full sm:w-auto flex items-center justify-center gap-2 px-6 py-3 rounded-xl bg-gradient-to-r from-indigo-600 to-emerald-600 hover:from-indigo-500 hover:to-emerald-500 text-white text-xs font-bold shadow-lg shadow-indigo-600/25 transition cursor-pointer disabled:opacity-60 min-h-[44px]"
           >
             {saving ? (
               <RefreshCw className="w-4 h-4 animate-spin" />

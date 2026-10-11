@@ -115,73 +115,73 @@ function BillContent() {
   return (
     <div className="min-h-screen bg-slate-950 text-slate-900 pb-16 print:bg-white print:p-0 print:pb-0">
       {/* Action Bar (Hidden in Print) */}
-      <div className="print:hidden sticky top-0 z-50 bg-slate-900/95 backdrop-blur-md border-b border-slate-800 px-4 py-3">
-        <div className="max-w-4xl mx-auto flex flex-wrap items-center justify-between gap-3">
-          <div className="flex items-center gap-3">
+      <div className="print:hidden sticky top-0 z-50 bg-slate-900/95 backdrop-blur-md border-b border-slate-800 px-3 sm:px-4 py-3">
+        <div className="max-w-4xl mx-auto flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3">
+          <div className="flex items-center justify-between sm:justify-start gap-2 sm:gap-3">
             <Link
               href="/orders"
-              className="flex items-center gap-1 text-xs text-slate-400 hover:text-white font-medium transition"
+              className="flex items-center gap-1 text-xs text-slate-400 hover:text-white font-medium transition py-1.5 px-2 -ml-2 rounded-lg hover:bg-slate-800"
             >
               <ArrowLeft className="w-4 h-4" />
-              <span>Back to Orders</span>
+              <span>Back</span>
             </Link>
-            <span className="text-slate-700">|</span>
-            <span className="text-xs font-bold font-mono text-indigo-400">
+            <span className="text-slate-700 hidden sm:inline">|</span>
+            <span className="text-xs font-bold font-mono text-indigo-400 truncate">
               {invoiceNumber}
             </span>
-            <span className="text-[10px] bg-indigo-500/10 text-indigo-300 font-mono px-2 py-0.5 rounded border border-indigo-500/20">
+            <span className="text-[10px] bg-indigo-500/10 text-indigo-300 font-mono px-2 py-0.5 rounded border border-indigo-500/20 shrink-0">
               IST (Asia/Kolkata)
             </span>
           </div>
 
-          <div className="flex flex-wrap items-center gap-2">
+          <div className="grid grid-cols-3 sm:flex sm:flex-wrap items-center gap-2">
             <button
               onClick={handleCopyLink}
-              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-semibold border border-slate-700 transition cursor-pointer"
+              className="flex items-center justify-center gap-1.5 px-2.5 sm:px-3 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-semibold border border-slate-700 transition cursor-pointer min-h-[40px]"
             >
               {copiedUrl ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5" />}
-              <span>{copiedUrl ? "Copied URL!" : "Copy Digital URL"}</span>
+              <span className="truncate">{copiedUrl ? "Copied!" : "Copy URL"}</span>
             </button>
 
             <button
               onClick={handleWhatsAppShare}
-              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-emerald-950/80 hover:bg-emerald-900 text-emerald-300 border border-emerald-500/40 text-xs font-semibold transition cursor-pointer"
+              className="flex items-center justify-center gap-1.5 px-2.5 sm:px-3 py-2 rounded-xl bg-emerald-950/80 hover:bg-emerald-900 text-emerald-300 border border-emerald-500/40 text-xs font-semibold transition cursor-pointer min-h-[40px]"
             >
               <MessageCircle className="w-3.5 h-3.5 text-emerald-400" />
-              <span>Share WhatsApp</span>
+              <span className="truncate">WhatsApp</span>
             </button>
 
             <button
               onClick={handlePrint}
-              className="flex items-center gap-1.5 px-4 py-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-bold shadow-lg shadow-indigo-600/25 transition cursor-pointer"
+              className="flex items-center justify-center gap-1.5 px-3 sm:px-4 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-bold shadow-lg shadow-indigo-600/25 transition cursor-pointer min-h-[40px]"
             >
               <Printer className="w-3.5 h-3.5" />
-              <span>Print Tax Invoice</span>
+              <span className="truncate">Print</span>
             </button>
           </div>
         </div>
       </div>
 
       {/* Main A4 Invoice Container */}
-      <div className="max-w-4xl mx-auto mt-6 print:mt-0 print:max-w-none print:w-full px-4 print:px-0">
-        <div className="bg-white rounded-2xl print:rounded-none shadow-2xl print:shadow-none border border-slate-200 print:border-none p-8 sm:p-12 space-y-8 text-slate-800">
+      <div className="max-w-4xl mx-auto mt-3 sm:mt-6 print:mt-0 print:max-w-none print:w-full px-2.5 sm:px-4 print:px-0">
+        <div className="bg-white rounded-xl sm:rounded-2xl print:rounded-none shadow-2xl print:shadow-none border border-slate-200 print:border-none p-4 sm:p-8 md:p-12 space-y-6 sm:space-y-8 text-slate-800">
           {/* Header Section: Company Profile & Tax Invoice Badge */}
-          <div className="flex flex-col sm:flex-row justify-between items-start gap-6 border-b border-slate-200 pb-6">
-            <div className="space-y-2 max-w-md">
+          <div className="flex flex-col sm:flex-row justify-between items-start gap-5 sm:gap-6 border-b border-slate-200 pb-5 sm:pb-6">
+            <div className="space-y-2 max-w-md w-full">
               <div className="flex items-center gap-3">
                 {company.logoUrl ? (
                   <img
                     src={company.logoUrl}
                     alt={company.name}
-                    className="h-12 w-auto max-w-[120px] object-contain rounded"
+                    className="h-10 sm:h-12 w-auto max-w-[120px] object-contain rounded"
                   />
                 ) : (
-                  <div className="w-11 h-11 rounded-xl bg-gradient-to-tr from-indigo-700 to-indigo-500 flex items-center justify-center text-white shadow-md font-bold text-lg">
+                  <div className="w-10 h-10 sm:w-11 sm:h-11 rounded-xl bg-gradient-to-tr from-indigo-700 to-indigo-500 flex items-center justify-center text-white shadow-md font-bold text-base sm:text-lg">
                     {company.name.slice(0, 2).toUpperCase()}
                   </div>
                 )}
                 <div>
-                  <h1 className="text-xl font-black text-slate-900 tracking-tight leading-tight">
+                  <h1 className="text-lg sm:text-xl font-black text-slate-900 tracking-tight leading-tight">
                     {company.name}
                   </h1>
                   <span className="text-[10px] font-semibold tracking-wider uppercase text-slate-500 block">
@@ -190,27 +190,27 @@ function BillContent() {
                 </div>
               </div>
 
-              <div className="text-xs text-slate-600 space-y-0.5 pt-1 leading-relaxed">
+              <div className="text-xs text-slate-600 space-y-1 pt-1 leading-relaxed">
                 <p className="flex items-start gap-1.5">
                   <MapPin className="w-3.5 h-3.5 text-slate-400 shrink-0 mt-0.5" />
                   <span>{company.address}</span>
                 </p>
-                <div className="flex flex-wrap gap-x-4 gap-y-0.5 text-slate-600 pt-0.5">
+                <div className="flex flex-wrap gap-x-4 gap-y-1 text-slate-600 pt-0.5">
                   {company.phone && (
-                    <span className="flex items-center gap-1">
+                    <a href={`tel:${company.phone}`} className="flex items-center gap-1 hover:text-indigo-600">
                       <Phone className="w-3 h-3 text-slate-400" />
                       {company.phone}
-                    </span>
+                    </a>
                   )}
                   {company.email && (
-                    <span className="flex items-center gap-1">
+                    <a href={`mailto:${company.email}`} className="flex items-center gap-1 hover:text-indigo-600">
                       <Mail className="w-3 h-3 text-slate-400" />
                       {company.email}
-                    </span>
+                    </a>
                   )}
                 </div>
                 {company.taxId && (
-                  <p className="font-mono font-bold text-slate-800 text-[11px] pt-1">
+                  <p className="font-mono font-bold text-slate-800 text-[11px] pt-0.5">
                     {company.taxId}
                   </p>
                 )}
@@ -218,7 +218,7 @@ function BillContent() {
             </div>
 
             {/* Invoice Meta Box */}
-            <div className="sm:text-right space-y-2 min-w-[220px]">
+            <div className="sm:text-right space-y-2 w-full sm:w-auto min-w-[200px] bg-slate-50 sm:bg-transparent p-3 sm:p-0 rounded-xl sm:rounded-none border sm:border-none border-slate-200">
               <div className="inline-block sm:text-right">
                 <span className="text-[10px] font-bold tracking-widest uppercase bg-indigo-50 text-indigo-700 px-2.5 py-1 rounded border border-indigo-200">
                   Tax Invoice / Bill of Supply
@@ -229,21 +229,21 @@ function BillContent() {
               </div>
 
               <div className="space-y-1 text-xs pt-1">
-                <div className="flex sm:justify-end gap-2">
+                <div className="flex justify-between sm:justify-end gap-2">
                   <span className="text-slate-500">Invoice No:</span>
                   <span className="font-mono font-bold text-slate-900">{invoiceNumber}</span>
                 </div>
-                <div className="flex sm:justify-end gap-2">
+                <div className="flex justify-between sm:justify-end gap-2">
                   <span className="text-slate-500">Order Ref:</span>
                   <span className="font-mono text-slate-700">{order.orderNumber}</span>
                 </div>
-                <div className="flex sm:justify-end gap-2">
+                <div className="flex justify-between sm:justify-end gap-2">
                   <span className="text-slate-500">Date &amp; Time:</span>
                   <span className="font-medium text-slate-900">
                     {formatDateTimeIST(order.createdAt, company.timezone)}
                   </span>
                 </div>
-                <div className="flex sm:justify-end gap-2">
+                <div className="flex justify-between sm:justify-end gap-2">
                   <span className="text-slate-500">Payment Status:</span>
                   <span
                     className={`font-bold uppercase text-[11px] px-2 py-0.5 rounded ${
@@ -255,7 +255,7 @@ function BillContent() {
                     {order.paymentStatus}
                   </span>
                 </div>
-                <div className="flex sm:justify-end gap-2">
+                <div className="flex justify-between sm:justify-end gap-2">
                   <span className="text-slate-500">Payment Mode:</span>
                   <span className="font-medium text-slate-800">{order.paymentMethod || "Cash on Delivery"}</span>
                 </div>
@@ -264,7 +264,7 @@ function BillContent() {
           </div>
 
           {/* Billed To / Customer & Shipping Details */}
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-6 bg-slate-50/80 p-5 rounded-xl border border-slate-200/80 text-xs">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 sm:gap-6 bg-slate-50/80 p-4 sm:p-5 rounded-xl border border-slate-200/80 text-xs">
             <div className="space-y-1">
               <span className="text-[10px] font-bold uppercase tracking-wider text-slate-500 block">
                 Billed To (Customer Details):
@@ -273,13 +273,13 @@ function BillContent() {
               {customer.phone && customer.phone !== "—" && (
                 <p className="text-slate-600 flex items-center gap-1 font-mono">
                   <Phone className="w-3 h-3 text-slate-400" />
-                  {customer.phone}
+                  <a href={`tel:${customer.phone}`} className="hover:text-indigo-600">{customer.phone}</a>
                 </p>
               )}
               {customer.email && customer.email !== "—" && (
                 <p className="text-slate-600 flex items-center gap-1">
                   <Mail className="w-3 h-3 text-slate-400" />
-                  {customer.email}
+                  <a href={`mailto:${customer.email}`} className="hover:text-indigo-600">{customer.email}</a>
                 </p>
               )}
             </div>
@@ -298,8 +298,42 @@ function BillContent() {
             </div>
           </div>
 
-          {/* Line Items Table */}
-          <div className="overflow-x-auto">
+          {/* Mobile Card View for Line Items (Shown on Phone, Hidden on Desktop & Print) */}
+          <div className="block sm:hidden print:hidden space-y-2.5">
+            <div className="text-[11px] font-bold uppercase tracking-wider text-slate-700 border-b border-slate-200 pb-1.5">
+              Order Items ({items.length})
+            </div>
+            {items.map((it: any, idx: number) => (
+              <div
+                key={it.id || idx}
+                className="p-3 rounded-xl bg-slate-50 border border-slate-200 space-y-1.5 text-xs"
+              >
+                <div className="flex items-start justify-between gap-2">
+                  <div className="font-bold text-slate-900 leading-snug">
+                    <span className="text-slate-400 mr-1.5">#{idx + 1}</span>
+                    {it.productName}
+                  </div>
+                  <div className="font-mono font-bold text-slate-900 text-sm shrink-0">
+                    ₹{parseFloat(it.totalPrice).toFixed(2)}
+                  </div>
+                </div>
+                <div className="flex items-center justify-between text-[11px] text-slate-500 pt-0.5">
+                  <span className="font-mono">SKU: {it.sku}</span>
+                  <span>
+                    ₹{parseFloat(it.unitPrice).toFixed(2)} × {it.quantity}
+                  </span>
+                </div>
+                {parseFloat(it.discount || 0) > 0 && (
+                  <div className="text-[10px] text-emerald-600 font-medium">
+                    Discount applied: -₹{parseFloat(it.discount).toFixed(2)}
+                  </div>
+                )}
+              </div>
+            ))}
+          </div>
+
+          {/* Line Items Table (Shown on Desktop and in Print Mode) */}
+          <div className="hidden sm:block print:block overflow-x-auto">
             <table className="w-full text-xs text-left border-collapse">
               <thead>
                 <tr className="border-b-2 border-slate-800 text-[11px] font-bold text-slate-900 uppercase">

@@ -152,12 +152,12 @@ export function OrderCreateModal({
   if (!isOpen) return null;
 
   return (
-    <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4 overflow-y-auto">
-      <div className="bg-slate-900 border border-slate-800 w-full max-w-2xl rounded-2xl shadow-2xl overflow-hidden my-8">
-        <div className="flex items-center justify-between px-6 py-4 border-b border-slate-800">
+    <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-center justify-center p-3 sm:p-4 overflow-y-auto">
+      <div className="bg-slate-900 border border-slate-800 w-full max-w-2xl rounded-2xl shadow-2xl overflow-hidden my-auto max-h-[92dvh] flex flex-col">
+        <div className="flex items-center justify-between px-5 sm:px-6 py-4 border-b border-slate-800 shrink-0">
           <div className="flex items-center gap-2">
             <ShoppingCart className="w-5 h-5 text-indigo-400" />
-            <h2 className="text-base font-bold text-white">Create Manual Order</h2>
+            <h2 className="text-sm sm:text-base font-bold text-white">Create Manual Order</h2>
           </div>
           <button
             onClick={onClose}
@@ -167,7 +167,7 @@ export function OrderCreateModal({
           </button>
         </div>
 
-        <form onSubmit={handleSubmit} className="p-6 space-y-5">
+        <form onSubmit={handleSubmit} className="p-4 sm:p-6 space-y-4 sm:space-y-5 overflow-y-auto flex-1">
           {error && (
             <div className="p-3 rounded-xl bg-rose-500/10 border border-rose-500/20 text-rose-400 text-xs">
               {error}
@@ -253,13 +253,13 @@ export function OrderCreateModal({
               {items.map((it, idx) => (
                 <div
                   key={idx}
-                  className="flex items-center gap-2 bg-slate-950/80 p-2.5 rounded-xl border border-slate-800"
+                  className="flex flex-col sm:flex-row sm:items-center gap-2 bg-slate-950/80 p-2.5 rounded-xl border border-slate-800"
                 >
                   <select
                     value={it.productId}
                     onChange={(e) => handleItemProductChange(idx, e.target.value)}
                     required
-                    className="flex-1 bg-slate-900 border border-slate-800 rounded-lg px-2.5 py-1.5 text-xs text-white"
+                    className="w-full sm:flex-1 bg-slate-900 border border-slate-800 rounded-lg px-2.5 py-2 sm:py-1.5 text-xs text-white"
                   >
                     <option value="">-- Select Product SKU --</option>
                     {products.map((p) => (
@@ -269,32 +269,34 @@ export function OrderCreateModal({
                     ))}
                   </select>
 
-                  <div className="flex items-center gap-1 shrink-0">
-                    <span className="text-[11px] text-slate-500">Qty:</span>
-                    <input
-                      type="number"
-                      min={1}
-                      value={it.quantity}
-                      onChange={(e) =>
-                        handleItemQuantityChange(idx, parseInt(e.target.value, 10))
-                      }
-                      className="w-16 bg-slate-900 border border-slate-800 rounded-lg px-2 py-1.5 text-xs text-white text-center font-mono"
-                    />
-                  </div>
+                  <div className="flex items-center justify-between sm:justify-end gap-2.5 shrink-0 pt-1.5 sm:pt-0 border-t sm:border-t-0 border-slate-800/60">
+                    <div className="flex items-center gap-1.5">
+                      <span className="text-[11px] text-slate-500">Qty:</span>
+                      <input
+                        type="number"
+                        min={1}
+                        value={it.quantity}
+                        onChange={(e) =>
+                          handleItemQuantityChange(idx, parseInt(e.target.value, 10))
+                        }
+                        className="w-16 bg-slate-900 border border-slate-800 rounded-lg px-2 py-1.5 text-xs text-white text-center font-mono"
+                      />
+                    </div>
 
-                  <div className="w-24 text-right text-xs font-mono text-emerald-400 font-bold shrink-0">
-                    ₹{(it.quantity * it.unitPrice).toFixed(2)}
-                  </div>
+                    <div className="w-20 text-right text-xs font-mono text-emerald-400 font-bold">
+                      ₹{(it.quantity * it.unitPrice).toFixed(2)}
+                    </div>
 
-                  {items.length > 1 && (
-                    <button
-                      type="button"
-                      onClick={() => removeItemRow(idx)}
-                      className="text-slate-500 hover:text-rose-400 p-1"
-                    >
-                      <Trash2 className="w-4 h-4" />
-                    </button>
-                  )}
+                    {items.length > 1 && (
+                      <button
+                        type="button"
+                        onClick={() => removeItemRow(idx)}
+                        className="text-slate-500 hover:text-rose-400 p-1.5 rounded-lg hover:bg-slate-900 min-h-[32px] min-w-[32px] flex items-center justify-center cursor-pointer"
+                      >
+                        <Trash2 className="w-4 h-4" />
+                      </button>
+                    )}
+                  </div>
                 </div>
               ))}
             </div>
@@ -373,7 +375,7 @@ export function OrderCreateModal({
           </div>
 
           {/* Order Total Preview & Buttons */}
-          <div className="pt-3 border-t border-slate-800 flex items-center justify-between">
+          <div className="pt-3 border-t border-slate-800 flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3">
             <div className="space-y-0.5">
               <div className="text-[11px] text-slate-400">
                 Subtotal: ₹{subtotal.toFixed(2)}
@@ -383,18 +385,18 @@ export function OrderCreateModal({
               </div>
             </div>
 
-            <div className="flex items-center gap-2">
+            <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2">
               <button
                 type="button"
                 onClick={onClose}
-                className="px-4 py-2 rounded-xl text-xs font-semibold text-slate-400 hover:text-white"
+                className="px-4 py-2.5 rounded-xl text-xs font-semibold text-slate-400 hover:text-white order-2 sm:order-1 text-center cursor-pointer"
               >
                 Cancel
               </button>
               <button
                 type="submit"
                 disabled={loading}
-                className="px-5 py-2.5 rounded-xl text-xs font-bold bg-indigo-600 hover:bg-indigo-500 text-white shadow-lg shadow-indigo-600/25 transition disabled:opacity-50"
+                className="px-5 py-2.5 rounded-xl text-xs font-bold bg-indigo-600 hover:bg-indigo-500 text-white shadow-lg shadow-indigo-600/25 transition disabled:opacity-50 order-1 sm:order-2 text-center cursor-pointer min-h-[42px]"
               >
                 {loading ? "Reserving Stock & Creating..." : "Confirm & Create Order"}
               </button>

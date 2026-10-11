@@ -108,48 +108,134 @@ export default function OrdersPage() {
       </div>
 
       {/* Filter Toolbar */}
-      <div className="flex flex-wrap items-center gap-3 bg-slate-900 border border-slate-800 p-3 rounded-2xl">
-        <div className="relative flex-1 min-w-[200px]">
+      <div className="flex flex-col sm:flex-row flex-wrap items-stretch sm:items-center gap-2.5 sm:gap-3 bg-slate-900 border border-slate-800 p-3 rounded-2xl">
+        <div className="relative flex-1 min-w-full sm:min-w-[200px]">
           <Search className="w-4 h-4 text-slate-500 absolute left-3 top-2.5" />
           <input
             type="text"
             placeholder="Search by order # (ORD-2026-...) or customer name..."
             value={search}
             onChange={(e) => setSearch(e.target.value)}
-            className="w-full bg-slate-950 border border-slate-800 rounded-xl pl-9 pr-3 py-1.5 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-indigo-500"
+            className="w-full bg-slate-950 border border-slate-800 rounded-xl pl-9 pr-3 py-2 sm:py-1.5 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-indigo-500"
           />
         </div>
 
-        <select
-          value={statusFilter}
-          onChange={(e) => setStatusFilter(e.target.value)}
-          className="bg-slate-950 border border-slate-800 rounded-xl px-3 py-1.5 text-xs text-white"
-        >
-          <option value="">All Fulfillment Statuses</option>
-          <option value="NEW">NEW</option>
-          <option value="CONFIRMED">CONFIRMED</option>
-          <option value="PROCESSING">PROCESSING</option>
-          <option value="PACKED">PACKED</option>
-          <option value="SHIPPED">SHIPPED</option>
-          <option value="DELIVERED">DELIVERED</option>
-          <option value="CANCELLED">CANCELLED</option>
-          <option value="RETURNED">RETURNED</option>
-        </select>
+        <div className="grid grid-cols-2 sm:flex sm:items-center gap-2">
+          <select
+            value={statusFilter}
+            onChange={(e) => setStatusFilter(e.target.value)}
+            className="bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 sm:py-1.5 text-xs text-white"
+          >
+            <option value="">All Statuses</option>
+            <option value="NEW">NEW</option>
+            <option value="CONFIRMED">CONFIRMED</option>
+            <option value="PROCESSING">PROCESSING</option>
+            <option value="PACKED">PACKED</option>
+            <option value="SHIPPED">SHIPPED</option>
+            <option value="DELIVERED">DELIVERED</option>
+            <option value="CANCELLED">CANCELLED</option>
+            <option value="RETURNED">RETURNED</option>
+          </select>
 
-        <select
-          value={paymentFilter}
-          onChange={(e) => setPaymentFilter(e.target.value)}
-          className="bg-slate-950 border border-slate-800 rounded-xl px-3 py-1.5 text-xs text-white"
-        >
-          <option value="">All Payment Statuses</option>
-          <option value="UNPAID">UNPAID</option>
-          <option value="PARTIALLY_PAID">PARTIALLY PAID</option>
-          <option value="PAID">PAID</option>
-        </select>
+          <select
+            value={paymentFilter}
+            onChange={(e) => setPaymentFilter(e.target.value)}
+            className="bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 sm:py-1.5 text-xs text-white"
+          >
+            <option value="">All Payments</option>
+            <option value="UNPAID">UNPAID</option>
+            <option value="PARTIALLY_PAID">PARTIALLY PAID</option>
+            <option value="PAID">PAID</option>
+          </select>
+        </div>
       </div>
 
-      {/* Orders Table */}
-      <div className="bg-slate-900 border border-slate-800 rounded-2xl overflow-hidden shadow-xl">
+      {/* Mobile Card List (Phones < 768px) */}
+      <div className="block md:hidden space-y-3">
+        {loading ? (
+          <div className="py-12 text-center text-slate-500 text-xs bg-slate-900 rounded-2xl border border-slate-800">
+            Loading orders...
+          </div>
+        ) : orders.length === 0 ? (
+          <div className="py-12 text-center text-slate-500 text-xs bg-slate-900 rounded-2xl border border-slate-800">
+            No orders match current criteria.
+          </div>
+        ) : (
+          orders.map((ord) => (
+            <div
+              key={ord.id}
+              className="p-4 rounded-2xl bg-slate-900 border border-slate-800 space-y-3 shadow-lg"
+            >
+              <div className="flex items-start justify-between gap-2">
+                <div>
+                  <button
+                    onClick={() => handleOpenDetail(ord.id)}
+                    className="font-mono font-bold text-sm text-indigo-400 hover:underline text-left block"
+                  >
+                    {ord.orderNumber}
+                  </button>
+                  <div className="text-[11px] text-slate-400 font-sans mt-0.5">
+                    {formatDateTimeIST(ord.createdAt)}
+                  </div>
+                </div>
+                <div className="text-right">
+                  <div className="font-mono font-bold text-base text-white">
+                    ₹{ord.totalAmount}
+                  </div>
+                  <span className="text-[10px] text-slate-400 bg-slate-800 px-1.5 py-0.5 rounded border border-slate-700">
+                    {ord.source}
+                  </span>
+                </div>
+              </div>
+
+              <div className="flex items-center justify-between text-xs text-slate-300 pt-1 border-t border-slate-800/80">
+                <div>
+                  <div className="font-semibold text-slate-200">{ord.customerName || "Customer"}</div>
+                  {ord.customerPhone && (
+                    <div className="text-[11px] text-slate-400 font-mono">{ord.customerPhone}</div>
+                  )}
+                </div>
+                <div className="flex items-center gap-1.5">
+                  <StatusBadge status={ord.status} />
+                  <StatusBadge status={ord.paymentStatus} />
+                </div>
+              </div>
+
+              {/* Quick Actions Row */}
+              <div className="grid grid-cols-3 gap-2 pt-1 border-t border-slate-800/80">
+                <a
+                  href={`/bill/${ord.id}`}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="flex items-center justify-center gap-1.5 py-2 px-2 rounded-xl bg-indigo-600/20 text-indigo-300 border border-indigo-500/30 text-xs font-semibold hover:bg-indigo-600/30 transition min-h-[40px]"
+                >
+                  <Receipt className="w-3.5 h-3.5" />
+                  <span>Bill</span>
+                </a>
+
+                <button
+                  onClick={() => handleOpenDetail(ord.id)}
+                  className="flex items-center justify-center gap-1.5 py-2 px-2 rounded-xl bg-slate-800 text-slate-200 text-xs font-semibold hover:bg-slate-700 transition min-h-[40px]"
+                >
+                  <Eye className="w-3.5 h-3.5" />
+                  <span>Details</span>
+                </button>
+
+                <button
+                  onClick={() => setSelectedSlipOrder(ord.id)}
+                  className="flex items-center justify-center gap-1.5 py-2 px-2 rounded-xl bg-slate-800 text-amber-300 text-xs font-semibold hover:bg-slate-700 transition min-h-[40px]"
+                >
+                  <FileText className="w-3.5 h-3.5" />
+                  <span>Slip</span>
+                </button>
+              </div>
+            </div>
+          ))
+        )}
+      </div>
+
+      {/* Desktop Orders Table (Table view for md: and up) */}
+      <div className="hidden md:block bg-slate-900 border border-slate-800 rounded-2xl overflow-hidden shadow-xl">
         <div className="overflow-x-auto">
           <table className="w-full text-left text-xs">
             <thead className="bg-slate-950/80 border-b border-slate-800 text-slate-400 font-semibold uppercase text-[10px] tracking-wider">
@@ -310,24 +396,24 @@ export default function OrdersPage() {
 
       {/* Order Detail Modal / Drawer */}
       {viewOrderDetail && (
-        <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4 overflow-y-auto">
-          <div className="bg-slate-900 border border-slate-800 w-full max-w-2xl rounded-2xl shadow-2xl overflow-hidden my-8">
-            <div className="flex items-center justify-between px-6 py-4 border-b border-slate-800">
+        <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-center justify-center p-3 sm:p-4 overflow-y-auto">
+          <div className="bg-slate-900 border border-slate-800 w-full max-w-2xl rounded-2xl shadow-2xl overflow-hidden my-auto max-h-[92dvh] flex flex-col">
+            <div className="flex items-center justify-between px-5 sm:px-6 py-4 border-b border-slate-800 shrink-0">
               <div className="flex items-center gap-2">
                 <ShoppingCart className="w-5 h-5 text-indigo-400" />
-                <h2 className="text-base font-bold text-white">
+                <h2 className="text-sm sm:text-base font-bold text-white">
                   Order Details: {viewOrderDetail.orderNumber}
                 </h2>
               </div>
               <button
                 onClick={() => setViewOrderDetail(null)}
-                className="text-slate-400 hover:text-white"
+                className="text-slate-400 hover:text-white p-1 rounded-lg"
               >
                 <X className="w-5 h-5" />
               </button>
             </div>
 
-            <div className="p-6 space-y-6 text-xs text-slate-300">
+            <div className="overflow-y-auto flex-1 p-4 sm:p-6 space-y-5 sm:space-y-6 text-xs text-slate-300">
               {/* Status Header */}
               <div className="flex items-center justify-between p-4 bg-slate-950 rounded-xl border border-slate-800">
                 <div className="space-y-1">

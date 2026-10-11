@@ -1,14 +1,16 @@
 "use client";
 
 import React, { useState, useEffect } from "react";
-import { Building2, ShieldCheck, Bell, Sparkles, LogOut } from "lucide-react";
+import { Building2, ShieldCheck, Bell, Sparkles, LogOut, Menu } from "lucide-react";
 
 export function Header({
   onNewOrder,
   onNewProduct,
+  onMenuClick,
 }: {
   onNewOrder?: () => void;
   onNewProduct?: () => void;
+  onMenuClick?: () => void;
 }) {
   const [user, setUser] = useState<{
     name: string;
@@ -44,15 +46,26 @@ export function Header({
   const initials = displayName.slice(0, 2).toUpperCase();
 
   return (
-    <header className="h-16 bg-slate-950/80 backdrop-blur-md border-b border-slate-800/80 px-6 flex items-center justify-between z-10 sticky top-0">
+    <header className="h-16 bg-slate-950/80 backdrop-blur-md border-b border-slate-800/80 px-3 sm:px-6 flex items-center justify-between z-10 sticky top-0">
       {/* Workspace Switcher & Context */}
-      <div className="flex items-center gap-3">
-        <div className="flex items-center gap-2 bg-slate-900 border border-slate-800 px-3 py-1.5 rounded-xl">
-          <Building2 className="w-4 h-4 text-indigo-400" />
-          <span className="text-xs font-semibold text-slate-200">
-            Apex Logistics & Retail
+      <div className="flex items-center gap-2 sm:gap-3">
+        {onMenuClick && (
+          <button
+            type="button"
+            onClick={onMenuClick}
+            aria-label="Open navigation menu"
+            className="md:hidden p-2 rounded-xl text-slate-300 hover:text-white hover:bg-slate-900 border border-slate-800 transition min-w-[40px] min-h-[40px] flex items-center justify-center cursor-pointer"
+          >
+            <Menu className="w-5 h-5 text-indigo-400" />
+          </button>
+        )}
+
+        <div className="flex items-center gap-1.5 sm:gap-2 bg-slate-900 border border-slate-800 px-2.5 sm:px-3 py-1.5 rounded-xl">
+          <Building2 className="w-4 h-4 text-indigo-400 shrink-0" />
+          <span className="text-xs font-semibold text-slate-200 truncate max-w-[120px] sm:max-w-none">
+            Apex Logistics
           </span>
-          <span className="text-[10px] bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 px-1.5 py-0.5 rounded font-mono">
+          <span className="text-[10px] bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 px-1.5 py-0.5 rounded font-mono shrink-0">
             ₹ INR
           </span>
         </div>
