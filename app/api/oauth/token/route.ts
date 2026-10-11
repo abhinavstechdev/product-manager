@@ -4,6 +4,19 @@ import { oauthGrants, oauthTokens } from "@/lib/db/schema";
 import { eq, and } from "drizzle-orm";
 import { verifyPkce } from "@/lib/auth/oauth";
 
+const CORS_HEADERS = {
+  "Access-Control-Allow-Origin": "*",
+  "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
+  "Access-Control-Allow-Headers": "Content-Type, Authorization",
+};
+
+export async function OPTIONS() {
+  return new NextResponse(null, {
+    status: 204,
+    headers: CORS_HEADERS,
+  });
+}
+
 export async function POST(request: NextRequest) {
   try {
     let body: any = {};
@@ -22,10 +35,10 @@ export async function POST(request: NextRequest) {
     if (grantType === "authorization_code") {
       const { code, redirect_uri, client_id, code_verifier } = body;
 
-      if (!code || !code_verifier) {
+      if (!code) {
         return NextResponse.json(
-          { error: "invalid_request", error_description: "Missing code or PKCE code_verifier" },
-          { status: 400 }
+          { error: "invalid_request", error_description: "Missing authorization code" },
+          { status: 400, headers: CORS_HEADERS }
         );
       }
 
@@ -38,31 +51,39 @@ export async function POST(request: NextRequest) {
       if (!grant) {
         return NextResponse.json(
           { error: "invalid_grant", error_description: "Invalid authorization code" },
-          { status: 400 }
+          { status: 400, headers: CORS_HEADERS }
         );
       }
 
       if (grant.usedAt) {
         return NextResponse.json(
           { error: "invalid_grant", error_description: "Authorization code has already been used" },
-          { status: 400 }
+          { status: 400, headers: CORS_HEADERS }
         );
       }
 
       if (new Date() > new Date(grant.expiresAt)) {
         return NextResponse.json(
           { error: "invalid_grant", error_description: "Authorization code has expired" },
-          { status: 400 }
+          { status: 400, headers: CORS_HEADERS }
         );
       }
 
-      // Verify PKCE code_verifier against code_challenge
-      const isPkceValid = verifyPkce(code_verifier, grant.codeChallenge, grant.codeChallengeMethod);
-      if (!isPkceValid) {
-        return NextResponse.json(
-          { error: "invalid_grant", error_description: "PKCE verification failed: code_verifier does not match code_challenge" },
-          { status: 400 }
-        );
+      // Verify PKCE code_verifier against code_challenge if required
+      if (grant.codeChallenge && grant.codeChallenge !== "client_secret_auth") {
+        if (!code_verifier) {
+          return NextResponse.json(
+            { error: "invalid_request", error_description: "Missing PKCE code_verifier" },
+            { status: 400, headers: CORS_HEADERS }
+          );
+        }
+        const isPkceValid = verifyPkce(code_verifier, grant.codeChallenge, grant.codeChallengeMethod);
+        if (!isPkceValid) {
+          return NextResponse.json(
+            { error: "invalid_grant", error_description: "PKCE verification failed: code_verifier does not match code_challenge" },
+            { status: 400, headers: CORS_HEADERS }
+          );
+        }
       }
 
       // Mark code as used
@@ -97,7 +118,7 @@ export async function POST(request: NextRequest) {
         expires_in: expiresInSeconds,
         refresh_token: refreshToken,
         scope: grant.scopes,
-      });
+      }, { headers: CORS_HEADERS });
     }
 
     if (grantType === "refresh_token") {
@@ -105,7 +126,7 @@ export async function POST(request: NextRequest) {
       if (!refresh_token) {
         return NextResponse.json(
           { error: "invalid_request", error_description: "Missing refresh_token" },
-          { status: 400 }
+          { status: 400, headers: CORS_HEADERS }
         );
       }
 
@@ -118,7 +139,7 @@ export async function POST(request: NextRequest) {
       if (!tokenRecord || tokenRecord.revokedAt) {
         return NextResponse.json(
           { error: "invalid_grant", error_description: "Invalid or revoked refresh token" },
-          { status: 400 }
+          { status: 400, headers: CORS_HEADERS }
         );
       }
 
@@ -141,18 +162,18 @@ export async function POST(request: NextRequest) {
         expires_in: expiresInSeconds,
         refresh_token: tokenRecord.refreshToken,
         scope: tokenRecord.scopes,
-      });
+      }, { headers: CORS_HEADERS });
     }
 
     return NextResponse.json(
       { error: "unsupported_grant_type", error_description: "Only authorization_code and refresh_token are supported" },
-      { status: 400 }
+      { status: 400, headers: CORS_HEADERS }
     );
   } catch (err: any) {
     console.error("OAuth token error:", err);
     return NextResponse.json(
       { error: "server_error", error_description: err?.message || "Internal server error" },
-      { status: 500 }
+      { status: 500, headers: CORS_HEADERS }
     );
   }
 }

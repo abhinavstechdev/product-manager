@@ -24,11 +24,14 @@ import {
   UserCheck,
   CheckCircle2,
   XCircle,
+  KeyRound,
 } from "lucide-react";
 
 export default function GeminiMcpPage() {
   const [copiedUrl, setCopiedUrl] = useState(false);
   const [copiedToken, setCopiedToken] = useState(false);
+  const [copiedClientId, setCopiedClientId] = useState(false);
+  const [copiedClientSecret, setCopiedClientSecret] = useState(false);
   const [activeTroubleshoot, setActiveTroubleshoot] = useState<string | null>(null);
 
   // Health check state
@@ -552,22 +555,78 @@ export default function GeminiMcpPage() {
                 Configure Advanced Authentication (When Required)
               </h3>
             </div>
-            <div className="pl-10 space-y-3">
+            <div className="pl-10 space-y-4">
               <p className="text-xs text-slate-300 leading-relaxed">
-                If Dynamic Client Registration (DCR) is not automatically negotiated by your client, select <strong>Advanced features</strong> or <strong>Show more</strong> in Gemini. Our server supports the following documented authentication methods:
+                When Google Gemini connects, it can authenticate either via <strong>Dynamic Client Registration (RFC 7591)</strong> or via the <strong>Additional Settings</strong> manual credentials form.
               </p>
+
+              {/* Direct OAuth Credentials Box matching the Gemini Modal */}
+              <div className="p-4 bg-slate-950 rounded-2xl border border-indigo-500/40 space-y-3">
+                <div className="flex items-center gap-2 text-indigo-400 text-xs font-bold uppercase tracking-wider">
+                  <KeyRound className="w-4 h-4 text-indigo-400" />
+                  <span>Google Gemini OAuth Credentials (For &quot;Additional settings&quot; Modal)</span>
+                </div>
+                <p className="text-xs text-slate-400 leading-relaxed">
+                  If Gemini prompts: <em>&quot;Automatic registration with this server failed. Enter your OAuth client ID and client secret to connect&quot;</em>, paste these credentials:
+                </p>
+
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-3 pt-1">
+                  <div className="p-3 bg-slate-900 rounded-xl border border-slate-800 space-y-1.5">
+                    <div className="flex items-center justify-between">
+                      <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">
+                        Client ID
+                      </span>
+                      <button
+                        onClick={() => copyToClipboard("google_gemini_mcp", setCopiedClientId)}
+                        className="text-[11px] text-indigo-400 hover:text-indigo-300 flex items-center gap-1 font-semibold cursor-pointer"
+                      >
+                        {copiedClientId ? <Check className="w-3.5 h-3.5" /> : <Copy className="w-3.5 h-3.5" />}
+                        {copiedClientId ? "Copied!" : "Copy Client ID"}
+                      </button>
+                    </div>
+                    <div className="font-mono text-xs text-emerald-400 bg-slate-950 p-2 rounded border border-slate-800 select-all font-bold">
+                      google_gemini_mcp
+                    </div>
+                  </div>
+
+                  <div className="p-3 bg-slate-900 rounded-xl border border-slate-800 space-y-1.5">
+                    <div className="flex items-center justify-between">
+                      <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">
+                        Client Secret
+                      </span>
+                      <button
+                        onClick={() => copyToClipboard("gemini_mcp_secret_apex2026", setCopiedClientSecret)}
+                        className="text-[11px] text-indigo-400 hover:text-indigo-300 flex items-center gap-1 font-semibold cursor-pointer"
+                      >
+                        {copiedClientSecret ? <Check className="w-3.5 h-3.5" /> : <Copy className="w-3.5 h-3.5" />}
+                        {copiedClientSecret ? "Copied!" : "Copy Secret"}
+                      </button>
+                    </div>
+                    <div className="font-mono text-xs text-emerald-400 bg-slate-950 p-2 rounded border border-slate-800 select-all font-bold">
+                      gemini_mcp_secret_apex2026
+                    </div>
+                  </div>
+                </div>
+
+                <div className="text-[11px] text-slate-400 pt-1 flex items-start gap-1.5">
+                  <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400 shrink-0 mt-0.5" />
+                  <span>
+                    After entering these, click <strong>Next</strong>. Gemini will redirect you to the Apex consent page to sign in and grant permission.
+                  </span>
+                </div>
+              </div>
 
               <div className="grid grid-cols-1 md:grid-cols-2 gap-3 text-xs">
                 <div className="p-3 bg-slate-900 rounded-xl border border-slate-800 space-y-1">
                   <div className="font-bold text-white flex items-center gap-1.5">
                     <ShieldCheck className="w-3.5 h-3.5 text-indigo-400" />
-                    Option A: OAuth 2.1 Discovery (Recommended)
+                    Automatic RFC 7591 Registration
                   </div>
                   <p className="text-slate-400 text-[11px]">
-                    Gemini auto-discovers metadata via standard discovery endpoints:
+                    Supported directly at the standard discovery registration endpoint:
                   </p>
                   <code className="text-indigo-300 font-mono text-[10px] block truncate">
-                    /.well-known/oauth-authorization-server
+                    /api/oauth/register
                   </code>
                 </div>
 
@@ -575,7 +634,7 @@ export default function GeminiMcpPage() {
                   <div className="flex items-center justify-between">
                     <div className="font-bold text-white flex items-center gap-1.5">
                       <Lock className="w-3.5 h-3.5 text-emerald-400" />
-                      Option B: Bearer Header Token
+                      Bearer Header Fallback
                     </div>
                     <button
                       onClick={() => copyToClipboard("Bearer mcp_dev_token_apex", setCopiedToken)}
@@ -586,7 +645,7 @@ export default function GeminiMcpPage() {
                     </button>
                   </div>
                   <p className="text-slate-400 text-[11px]">
-                    If Gemini allows custom headers, supply authorization:
+                    If Gemini allows custom header authorization:
                   </p>
                   <code className="text-emerald-300 font-mono text-[10px] block truncate">
                     Authorization: Bearer mcp_dev_token_apex

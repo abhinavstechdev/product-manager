@@ -107,13 +107,22 @@ function ConsentForm() {
     );
   }
 
-  // Parse hostname for display
-  let clientDomain = "ChatGPT / Remote Client";
+  // Parse hostname for display & client identity
+  let clientDomain = "AI Assistant";
+  let isGemini = false;
   try {
     if (redirectUri) {
       clientDomain = new URL(redirectUri).hostname;
     }
   } catch {}
+  if (clientDomain.toLowerCase().includes("google") || clientId?.toLowerCase().includes("gemini")) {
+    isGemini = true;
+  }
+  const clientDisplayName = isGemini
+    ? "Google Gemini"
+    : clientDomain.includes("chatgpt") || clientDomain.includes("openai")
+    ? "ChatGPT"
+    : "ChatGPT / Remote AI Assistant";
 
   return (
     <div className="min-h-screen w-screen flex items-center justify-center p-4 sm:p-6 bg-slate-950 text-slate-100 relative overflow-hidden select-none">
@@ -126,14 +135,14 @@ function ConsentForm() {
           {/* Header */}
           <div className="text-center space-y-2">
             <div className="inline-flex items-center justify-center w-12 h-12 rounded-xl bg-gradient-to-tr from-indigo-600 via-indigo-500 to-emerald-400 text-white shadow-lg shadow-indigo-500/25 mb-1">
-              <Bot className="w-6 h-6" />
+              {isGemini ? <Sparkles className="w-6 h-6" /> : <Bot className="w-6 h-6" />}
             </div>
             <h1 className="text-xl font-bold tracking-tight text-white flex items-center justify-center gap-2">
-              Grant Permission to ChatGPT
+              Grant Permission to {clientDisplayName}
               <Sparkles className="w-4 h-4 text-indigo-400" />
             </h1>
             <p className="text-xs text-slate-400 max-w-sm mx-auto">
-              ChatGPT (Model Context Protocol) is requesting access to connect to your Apex Logistics store.
+              {clientDisplayName} (Model Context Protocol) is requesting access to connect to your Apex Logistics store.
             </p>
           </div>
 
@@ -223,7 +232,7 @@ function ConsentForm() {
           {authorizedSuccess && (
             <div className="bg-emerald-950/50 border border-emerald-500/30 rounded-xl p-3 flex items-center gap-2.5 text-xs text-emerald-300 animate-in fade-in">
               <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
-              <span>Permission granted! Redirecting to ChatGPT...</span>
+              <span>Permission granted! Redirecting to {clientDisplayName}...</span>
             </div>
           )}
 
@@ -257,7 +266,7 @@ function ConsentForm() {
           </div>
 
           <div className="text-center text-[11px] text-slate-500 pt-1">
-            Authorizing will issue an OAuth 2.1 access token to ChatGPT on behalf of <strong className="text-slate-400">seveton</strong>.
+            Authorizing will issue an OAuth access token to {clientDisplayName} on behalf of <strong className="text-slate-400">seveton</strong>.
           </div>
         </div>
       </div>

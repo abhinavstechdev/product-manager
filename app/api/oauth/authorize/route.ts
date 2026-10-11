@@ -21,13 +21,6 @@ export async function GET(request: NextRequest) {
     );
   }
 
-  if (!codeChallenge) {
-    return NextResponse.json(
-      { error: "invalid_request", error_description: "PKCE code_challenge is required for OAuth 2.1" },
-      { status: 400 }
-    );
-  }
-
   // 1. Verify user is authenticated
   const session = await getOptionalSession();
   if (!session) {
@@ -92,12 +85,8 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ redirectUrl: targetRedirect.toString() });
   }
 
-  if (!codeChallenge) {
-    return NextResponse.json(
-      { error: "invalid_request", error_description: "PKCE code_challenge is required" },
-      { status: 400 }
-    );
-  }
+  const effectiveCodeChallenge = codeChallenge || "client_secret_auth";
+  const effectiveCodeChallengeMethod = codeChallenge ? codeChallengeMethod : "none";
 
   const db = await getDb();
 
@@ -110,11 +99,14 @@ export async function POST(request: NextRequest) {
 
   if (!app) {
     const appId = `app_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
+    const clientName = clientId.toLowerCase().includes("gemini")
+      ? "Google Gemini MCP"
+      : "ChatGPT / Remote AI Assistant";
     await (db as any).insert(oauthApplications).values({
       id: appId,
       workspaceId: session.workspaceId,
       clientId,
-      clientName: "ChatGPT / Remote AI Assistant",
+      clientName,
       redirectUris: JSON.stringify([redirectUri]),
       scopes: scope,
       createdAt: new Date(),
@@ -133,8 +125,8 @@ export async function POST(request: NextRequest) {
     userId: session.userId,
     workspaceId: session.workspaceId,
     scopes: scope,
-    codeChallenge,
-    codeChallengeMethod,
+    codeChallenge: effectiveCodeChallenge,
+    codeChallengeMethod: effectiveCodeChallengeMethod,
     redirectUri,
     expiresAt,
   });
@@ -149,4 +141,15 @@ export async function POST(request: NextRequest) {
   }
 
   return NextResponse.json({ redirectUrl: targetRedirect.toString() });
+}
+
+export async function OPTIONS() {
+  return new NextResponse(null, {
+    status: 204,
+    headers: {
+      "Access-Control-Allow-Origin": "*",
+      "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
+      "Access-Control-Allow-Headers": "Content-Type, Authorization",
+    },
+  });
 }
