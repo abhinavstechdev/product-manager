@@ -69,6 +69,8 @@ export async function PATCH(request: NextRequest) {
       orderId: body.orderId,
       newStatus: body.newStatus,
       note: body.note || null,
+      cancellationReason: body.cancellationReason || null,
+      cancellationFee: body.cancellationFee !== undefined ? parseFloat(body.cancellationFee) : undefined,
       actor: { id: session.userId, name: session.name, type: "USER" },
       sourceType: "web",
     });

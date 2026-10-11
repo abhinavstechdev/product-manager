@@ -26,6 +26,10 @@ export const workspaces = pgTable("workspaces", {
   invoicePrefix: text("invoice_prefix").default("INV"),
   invoiceFooterNotes: text("invoice_footer_notes"),
   timezone: text("timezone").notNull().default("Asia/Kolkata"),
+  cancellationDeductionType: text("cancellation_deduction_type").default("PERCENTAGE"), // "PERCENTAGE", "FIXED", "NONE"
+  cancellationDeductionValue: numeric("cancellation_deduction_value", { precision: 10, scale: 2 }).default("5.00"),
+  cancellationRestockPolicy: text("cancellation_restock_policy").default("RELEASE_TO_AVAILABLE"), // "RELEASE_TO_AVAILABLE", "HOLD_IN_RESERVE"
+  cancellationNotice: text("cancellation_notice"),
   createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
 });
@@ -151,6 +155,9 @@ export const orders = pgTable(
     totalAmount: numeric("total_amount", { precision: 12, scale: 2 }).notNull().default("0.00"),
     paymentStatus: text("payment_status").notNull().default("UNPAID"), // UNPAID, PARTIALLY_PAID, PAID, REFUNDED
     paymentMethod: text("payment_method").default("Cash on Delivery"),
+    cancellationFee: numeric("cancellation_fee", { precision: 12, scale: 2 }).default("0.00"),
+    cancellationReason: text("cancellation_reason"),
+    refundAmount: numeric("refund_amount", { precision: 12, scale: 2 }).default("0.00"),
     packingNotes: text("packing_notes"),
     notes: text("notes"),
     idempotencyKey: text("idempotency_key"),

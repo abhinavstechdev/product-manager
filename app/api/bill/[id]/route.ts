@@ -88,6 +88,11 @@ export async function GET(
         "1. This is a computer-generated tax invoice and requires no physical signature.\n2. Goods once sold can be returned within 7 days in original condition with QC verification.\n3. All disputes subject to local jurisdiction.",
       timezone: ws?.timezone || "Asia/Kolkata",
       currency: ws?.currency || "INR",
+      cancellationNotice:
+        ws?.cancellationNotice ||
+        "A cancellation deduction fee applies to cancelled orders as per company policy. The remaining net amount is credited/refunded.",
+      cancellationDeductionType: ws?.cancellationDeductionType || "PERCENTAGE",
+      cancellationDeductionValue: ws?.cancellationDeductionValue || "5.00",
     };
 
     return NextResponse.json({
@@ -107,6 +112,9 @@ export async function GET(
         discount: order.discount,
         shippingFee: order.shippingFee,
         totalAmount: order.totalAmount,
+        cancellationFee: order.cancellationFee || "0.00",
+        cancellationReason: order.cancellationReason || null,
+        refundAmount: order.refundAmount || "0.00",
         notes: order.notes,
         createdAt: order.createdAt,
       },

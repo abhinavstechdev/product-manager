@@ -491,6 +491,38 @@ export default function OrdersPage() {
                 </div>
               </div>
 
+              {/* Cancelled Order Deduction & Refund Summary */}
+              {viewOrderDetail.status === "CANCELLED" && (
+                <div className="p-3.5 bg-rose-950/30 rounded-xl border border-rose-500/30 text-xs text-rose-300 space-y-1.5">
+                  <div className="flex items-center justify-between font-bold flex-wrap gap-2">
+                    <span className="flex items-center gap-1.5 text-rose-400">
+                      <XCircle className="w-4 h-4" /> Order Cancelled
+                    </span>
+                    {viewOrderDetail.cancellationReason && (
+                      <span className="text-[11px] bg-rose-900/40 text-rose-200 px-2 py-0.5 rounded font-normal">
+                        Reason: {viewOrderDetail.cancellationReason}
+                      </span>
+                    )}
+                  </div>
+                  <div className="grid grid-cols-2 gap-2 pt-1 font-mono text-[11px]">
+                    <div className="bg-slate-950/60 p-2 rounded-lg border border-rose-900/40">
+                      <span className="text-slate-400 block text-[10px]">Cancellation Deduction Fee:</span>
+                      <span className="text-rose-400 font-bold text-xs">-₹{parseFloat(viewOrderDetail.cancellationFee || 0).toFixed(2)}</span>
+                    </div>
+                    <div className="bg-slate-950/60 p-2 rounded-lg border border-emerald-900/40">
+                      <span className="text-slate-400 block text-[10px]">Net Refund / Payable:</span>
+                      <span className="text-emerald-400 font-bold text-xs">
+                        ₹{parseFloat(
+                          viewOrderDetail.refundAmount !== undefined && viewOrderDetail.refundAmount !== null
+                            ? viewOrderDetail.refundAmount
+                            : Math.max(0, parseFloat(viewOrderDetail.totalAmount || 0) - parseFloat(viewOrderDetail.cancellationFee || 0))
+                        ).toFixed(2)}
+                      </span>
+                    </div>
+                  </div>
+                </div>
+              )}
+
               {/* Customer & Shipping */}
               <div className="grid grid-cols-2 gap-4">
                 <div className="p-3 bg-slate-950 rounded-xl border border-slate-800">

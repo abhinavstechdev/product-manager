@@ -1383,6 +1383,7 @@ export function createMcpServer(principal: McpAuthPrincipal) {
         orderId,
         newStatus: "CANCELLED",
         note: `Cancelled: ${reason}`,
+        cancellationReason: reason,
         actor,
         sourceType: "mcp",
       });

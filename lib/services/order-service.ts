@@ -9,6 +9,7 @@ import {
   shipments,
   returns,
   idempotencyRecords,
+  workspaces,
 } from "../db/schema";
 import { eq, and, or, sql, desc } from "drizzle-orm";
 import { reserveStockForOrder, releaseStockForOrder, StockActor } from "./inventory-service";
@@ -514,6 +515,8 @@ export async function updateOrderStatus(params: {
   orderId: string;
   newStatus: "NEW" | "CONFIRMED" | "PROCESSING" | "PACKED" | "SHIPPED" | "DELIVERED" | "CANCELLED" | "RETURNED";
   note?: string | null;
+  cancellationReason?: string | null;
+  cancellationFee?: number | null;
   actor: StockActor;
   sourceType: "web" | "mcp";
 }) {
@@ -532,7 +535,15 @@ export async function updateOrderStatus(params: {
   const prevStatus = order.status;
 
   if (prevStatus === params.newStatus) {
-    return { success: true, orderId: order.id, status: prevStatus, message: "Status already set" };
+    return {
+      success: true,
+      orderId: order.id,
+      orderNumber: order.orderNumber,
+      previousStatus: prevStatus,
+      currentStatus: prevStatus,
+      status: prevStatus,
+      message: "Status already set",
+    };
   }
 
   // Validate state transitions
@@ -551,30 +562,75 @@ export async function updateOrderStatus(params: {
     throw new Error(`Invalid order status transition from ${prevStatus} to ${params.newStatus}`);
   }
 
-  // If cancelling an order that held reservations: release reserved stock!
-  if (params.newStatus === "CANCELLED" && ["NEW", "CONFIRMED", "PROCESSING", "PACKED"].includes(prevStatus)) {
-    const items = await (db as any)
-      .select()
-      .from(orderItems)
-      .where(eq(orderItems.orderId, order.id));
+  let calculatedCancellationFee = 0;
+  let calculatedRefundAmount = 0;
+  let cancellationReasonStr: string | null = null;
 
-    await releaseStockForOrder({
-      workspaceId: params.workspaceId,
-      orderId: order.id,
-      orderNumber: order.orderNumber,
-      items: items.map((it: any) => ({ productId: it.productId, quantity: it.quantity })),
-      actor: params.actor,
-      reason: `Order ${order.orderNumber} cancelled by ${params.actor.name}`,
-    });
+  // Handle Cancellation Logic (Deductions & Inventory Restock Policy)
+  if (params.newStatus === "CANCELLED") {
+    // 1. Fetch workspace cancellation deduction policy
+    const [ws] = await (db as any)
+      .select()
+      .from(workspaces)
+      .where(eq(workspaces.id, params.workspaceId))
+      .limit(1);
+
+    const totalAmount = parseFloat(order.totalAmount || "0");
+
+    if (params.cancellationFee !== undefined && params.cancellationFee !== null) {
+      calculatedCancellationFee = Math.max(0, Math.min(totalAmount, Number(params.cancellationFee)));
+    } else if (ws) {
+      const deductionType = ws.cancellationDeductionType || "PERCENTAGE";
+      const deductionVal = parseFloat(ws.cancellationDeductionValue || "0");
+
+      if (deductionType === "PERCENTAGE") {
+        calculatedCancellationFee = Math.round((totalAmount * (deductionVal / 100)) * 100) / 100;
+      } else if (deductionType === "FIXED") {
+        calculatedCancellationFee = Math.min(totalAmount, Math.max(0, deductionVal));
+      } else {
+        calculatedCancellationFee = 0;
+      }
+    }
+
+    calculatedRefundAmount = Math.max(0, Math.round((totalAmount - calculatedCancellationFee) * 100) / 100);
+    cancellationReasonStr = params.cancellationReason || params.note || "Order cancelled";
+
+    // 2. Apply Restock Policy
+    const restockPolicy = ws?.cancellationRestockPolicy || "RELEASE_TO_AVAILABLE";
+    if (["NEW", "CONFIRMED", "PROCESSING", "PACKED"].includes(prevStatus)) {
+      if (restockPolicy === "RELEASE_TO_AVAILABLE") {
+        const items = await (db as any)
+          .select()
+          .from(orderItems)
+          .where(eq(orderItems.orderId, order.id));
+
+        await releaseStockForOrder({
+          workspaceId: params.workspaceId,
+          orderId: order.id,
+          orderNumber: order.orderNumber,
+          items: items.map((it: any) => ({ productId: it.productId, quantity: it.quantity })),
+          actor: params.actor,
+          reason: `Order ${order.orderNumber} cancelled by ${params.actor.name} (Policy: Released to Available Stock)`,
+        });
+      }
+    }
   }
 
-  // Update order status
+  // Update order status and cancellation amounts if applicable
+  const orderUpdatePayload: Record<string, any> = {
+    status: params.newStatus,
+    updatedAt: new Date(),
+  };
+
+  if (params.newStatus === "CANCELLED") {
+    orderUpdatePayload.cancellationFee = calculatedCancellationFee.toFixed(2);
+    orderUpdatePayload.cancellationReason = cancellationReasonStr;
+    orderUpdatePayload.refundAmount = calculatedRefundAmount.toFixed(2);
+  }
+
   await (db as any)
     .update(orders)
-    .set({
-      status: params.newStatus,
-      updatedAt: new Date(),
-    })
+    .set(orderUpdatePayload)
     .where(eq(orders.id, order.id));
 
   // Insert status history
@@ -586,7 +642,11 @@ export async function updateOrderStatus(params: {
     actorId: params.actor.id,
     actorName: params.actor.name,
     source: params.sourceType,
-    note: params.note || `Status transition: ${prevStatus} -> ${params.newStatus}`,
+    note:
+      params.note ||
+      (params.newStatus === "CANCELLED"
+        ? `Order cancelled. Deduction fee: ₹${calculatedCancellationFee.toFixed(2)}, Net refund: ₹${calculatedRefundAmount.toFixed(2)}`
+        : `Status transition: ${prevStatus} -> ${params.newStatus}`),
     createdAt: new Date(),
   });
 
@@ -600,7 +660,16 @@ export async function updateOrderStatus(params: {
     operation: "UPDATE_ORDER_STATUS",
     targetRecord: order.orderNumber,
     beforeState: { status: prevStatus },
-    afterState: { status: params.newStatus },
+    afterState: {
+      status: params.newStatus,
+      ...(params.newStatus === "CANCELLED"
+        ? {
+            cancellationFee: calculatedCancellationFee.toFixed(2),
+            refundAmount: calculatedRefundAmount.toFixed(2),
+            reason: cancellationReasonStr,
+          }
+        : {}),
+    },
     outcome: "SUCCESS",
   });
 
@@ -610,6 +679,13 @@ export async function updateOrderStatus(params: {
     order_number: order.orderNumber,
     previous_status: prevStatus,
     current_status: params.newStatus,
+    ...(params.newStatus === "CANCELLED"
+      ? {
+          cancellation_fee: calculatedCancellationFee.toFixed(2),
+          refund_amount: calculatedRefundAmount.toFixed(2),
+          cancellation_reason: cancellationReasonStr,
+        }
+      : {}),
     url: `${getBaseUrl()}/orders#${order.id}`,
   });
 
@@ -618,6 +694,13 @@ export async function updateOrderStatus(params: {
     orderNumber: order.orderNumber,
     previousStatus: prevStatus,
     currentStatus: params.newStatus,
+    ...(params.newStatus === "CANCELLED"
+      ? {
+          cancellationFee: calculatedCancellationFee.toFixed(2),
+          refundAmount: calculatedRefundAmount.toFixed(2),
+          cancellationReason: cancellationReasonStr,
+        }
+      : {}),
   };
 }
 

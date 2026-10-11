@@ -154,7 +154,7 @@ export async function ensureSchemaAndSeed(database: AppDatabase) {
       `);
     } catch {}
 
-    // Ensure company settings and timezone columns exist on workspaces table
+    // Ensure company settings, timezone, and cancellation deduction columns exist on workspaces table
     const workspaceColumns = [
       "ALTER TABLE workspaces ADD COLUMN IF NOT EXISTS company_name text",
       "ALTER TABLE workspaces ADD COLUMN IF NOT EXISTS company_address text",
@@ -166,6 +166,13 @@ export async function ensureSchemaAndSeed(database: AppDatabase) {
       "ALTER TABLE workspaces ADD COLUMN IF NOT EXISTS invoice_prefix text DEFAULT 'INV'",
       "ALTER TABLE workspaces ADD COLUMN IF NOT EXISTS invoice_footer_notes text",
       "ALTER TABLE workspaces ADD COLUMN IF NOT EXISTS timezone text DEFAULT 'Asia/Kolkata'",
+      "ALTER TABLE workspaces ADD COLUMN IF NOT EXISTS cancellation_deduction_type text DEFAULT 'PERCENTAGE'",
+      "ALTER TABLE workspaces ADD COLUMN IF NOT EXISTS cancellation_deduction_value numeric(10, 2) DEFAULT '5.00'",
+      "ALTER TABLE workspaces ADD COLUMN IF NOT EXISTS cancellation_restock_policy text DEFAULT 'RELEASE_TO_AVAILABLE'",
+      "ALTER TABLE workspaces ADD COLUMN IF NOT EXISTS cancellation_notice text",
+      "ALTER TABLE orders ADD COLUMN IF NOT EXISTS cancellation_fee numeric(12, 2) DEFAULT '0.00'",
+      "ALTER TABLE orders ADD COLUMN IF NOT EXISTS cancellation_reason text",
+      "ALTER TABLE orders ADD COLUMN IF NOT EXISTS refund_amount numeric(12, 2) DEFAULT '0.00'",
     ];
 
     for (const colQuery of workspaceColumns) {

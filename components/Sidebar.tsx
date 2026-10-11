@@ -34,8 +34,9 @@ const navigationItems = [
   { name: "Reports & Analytics", href: "/reports", icon: BarChart3 },
   { name: "Company & Bill Settings", href: "/settings", icon: Settings },
   { name: "AI Activity & Approvals", href: "/ai-activity", icon: Bot, badge: "AI" },
+  { name: "MCP for All AI", href: "/all-ai-mcp", icon: Sparkles, badge: "UNIVERSAL", highlight: true },
   { name: "ChatGPT MCP Guide", href: "/chatgpt-mcp", icon: Bot },
-  { name: "Google Gemini MCP Guide", href: "/gemini-mcp", icon: Sparkles, badge: "NEW", highlight: true },
+  { name: "Google Gemini MCP Guide", href: "/gemini-mcp", icon: Sparkles, badge: "NEW" },
   { name: "MCP Server Configuration", href: "/mcp-connections", icon: Plug },
 ];
 

@@ -36,6 +36,12 @@ export async function GET(request: NextRequest) {
           "1. This is a computer-generated tax invoice and requires no physical signature.\n2. Goods once sold can be returned within 7 days in original condition with QC verification.\n3. All disputes subject to local jurisdiction.",
         timezone: ws.timezone || "Asia/Kolkata",
         currency: ws.currency || "INR",
+        cancellationDeductionType: ws.cancellationDeductionType || "PERCENTAGE",
+        cancellationDeductionValue: ws.cancellationDeductionValue || "5.00",
+        cancellationRestockPolicy: ws.cancellationRestockPolicy || "RELEASE_TO_AVAILABLE",
+        cancellationNotice:
+          ws.cancellationNotice ||
+          "A cancellation deduction fee applies to cancelled orders as per company policy. The remaining net amount is credited/refunded to original payment method within 3-5 business days.",
         name: ws.name,
       },
     });
@@ -71,6 +77,10 @@ export async function POST(request: NextRequest) {
     if (body.invoiceFooterNotes !== undefined) updatePayload.invoiceFooterNotes = body.invoiceFooterNotes;
     if (body.timezone !== undefined) updatePayload.timezone = body.timezone || "Asia/Kolkata";
     if (body.currency !== undefined) updatePayload.currency = body.currency || "INR";
+    if (body.cancellationDeductionType !== undefined) updatePayload.cancellationDeductionType = body.cancellationDeductionType;
+    if (body.cancellationDeductionValue !== undefined) updatePayload.cancellationDeductionValue = String(body.cancellationDeductionValue);
+    if (body.cancellationRestockPolicy !== undefined) updatePayload.cancellationRestockPolicy = body.cancellationRestockPolicy;
+    if (body.cancellationNotice !== undefined) updatePayload.cancellationNotice = body.cancellationNotice;
 
     await (db as any)
       .update(workspaces)
@@ -85,6 +95,10 @@ export async function POST(request: NextRequest) {
         companyLogoUrl: updatePayload.companyLogoUrl,
         currency: updatePayload.currency,
         timezone: updatePayload.timezone,
+        cancellationDeductionType: updatePayload.cancellationDeductionType,
+        cancellationDeductionValue: updatePayload.cancellationDeductionValue,
+        cancellationRestockPolicy: updatePayload.cancellationRestockPolicy,
+        cancellationNotice: updatePayload.cancellationNotice,
       },
     });
   } catch (err: any) {

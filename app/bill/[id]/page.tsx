@@ -244,6 +244,20 @@ function BillContent() {
                   </span>
                 </div>
                 <div className="flex justify-between sm:justify-end gap-2">
+                  <span className="text-slate-500">Order Status:</span>
+                  <span
+                    className={`font-bold uppercase text-[11px] px-2 py-0.5 rounded ${
+                      order.status === "CANCELLED"
+                        ? "bg-rose-100 text-rose-800 border border-rose-200"
+                        : order.status === "DELIVERED"
+                        ? "bg-emerald-100 text-emerald-800"
+                        : "bg-slate-100 text-slate-800"
+                    }`}
+                  >
+                    {order.status}
+                  </span>
+                </div>
+                <div className="flex justify-between sm:justify-end gap-2">
                   <span className="text-slate-500">Payment Status:</span>
                   <span
                     className={`font-bold uppercase text-[11px] px-2 py-0.5 rounded ${
@@ -262,6 +276,29 @@ function BillContent() {
               </div>
             </div>
           </div>
+
+          {/* Cancelled Order Notice Banner */}
+          {order.status === "CANCELLED" && (
+            <div className="bg-rose-50 border-2 border-rose-300 rounded-xl p-3.5 sm:p-4 text-xs text-rose-900 flex items-start gap-3 print:border-rose-400">
+              <AlertCircle className="w-5 h-5 text-rose-600 shrink-0 mt-0.5" />
+              <div className="space-y-1 flex-1">
+                <div className="flex items-center justify-between gap-2 flex-wrap">
+                  <span className="font-bold uppercase tracking-wider text-[11px] text-rose-700">
+                    Notice: This Order is Cancelled
+                  </span>
+                  {order.cancellationReason && (
+                    <span className="font-medium text-rose-800 bg-rose-100 px-2 py-0.5 rounded text-[11px]">
+                      Reason: {order.cancellationReason}
+                    </span>
+                  )}
+                </div>
+                <p className="text-[11px] text-rose-700 leading-relaxed">
+                  {company.cancellationNotice ||
+                    "A cancellation deduction fee applies to cancelled orders as per company policy. The remaining net amount is credited/refunded to the original payment method."}
+                </p>
+              </div>
+            </div>
+          )}
 
           {/* Billed To / Customer & Shipping Details */}
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 sm:gap-6 bg-slate-50/80 p-4 sm:p-5 rounded-xl border border-slate-200/80 text-xs">
@@ -422,14 +459,40 @@ function BillContent() {
               </div>
 
               <div className="flex justify-between items-center text-sm font-black text-slate-900 pt-2 border-t-2 border-slate-900">
-                <span>Total Amount:</span>
+                <span>{order.status === "CANCELLED" ? "Original Order Total:" : "Total Amount:"}</span>
                 <span className="font-mono text-base text-indigo-900">
                   ₹{parseFloat(order.totalAmount || 0).toFixed(2)}
                 </span>
               </div>
 
+              {order.status === "CANCELLED" && (
+                <div className="space-y-1.5 pt-1 border-t border-dashed border-slate-300">
+                  <div className="flex justify-between text-rose-700 font-semibold text-xs">
+                    <span>Cancellation Deduction Fee:</span>
+                    <span className="font-mono">
+                      -₹{parseFloat(order.cancellationFee || 0).toFixed(2)}
+                    </span>
+                  </div>
+
+                  <div className="flex justify-between items-center text-sm font-black text-emerald-900 pt-1 border-t border-slate-300">
+                    <span>Net Refund / Payable:</span>
+                    <span className="font-mono text-base text-emerald-700">
+                      ₹{parseFloat(
+                        order.refundAmount !== undefined && order.refundAmount !== null
+                          ? order.refundAmount
+                          : Math.max(0, parseFloat(order.totalAmount || 0) - parseFloat(order.cancellationFee || 0))
+                      ).toFixed(2)}
+                    </span>
+                  </div>
+                </div>
+              )}
+
               <div className="p-2.5 rounded-lg bg-slate-100 text-center text-[11px] text-slate-600 mt-2 font-medium">
-                {order.paymentStatus === "PAID" ? (
+                {order.status === "CANCELLED" ? (
+                  <span className="text-rose-700 font-bold">
+                    Order Cancelled • Deduction Fee: ₹{parseFloat(order.cancellationFee || 0).toFixed(2)} Applied
+                  </span>
+                ) : order.paymentStatus === "PAID" ? (
                   <span className="text-emerald-700 font-bold">
                     ✓ Total Amount Received in Full
                   </span>

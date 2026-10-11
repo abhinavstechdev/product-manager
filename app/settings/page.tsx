@@ -30,6 +30,10 @@ import {
   KeyRound,
   Copy,
   ExternalLink,
+  XCircle,
+  Percent,
+  ShieldAlert,
+  Undo2,
 } from "lucide-react";
 import { useBranding } from "@/components/BrandingContext";
 
@@ -71,6 +75,11 @@ export default function SettingsPage() {
     invoiceFooterNotes: "",
     timezone: "Asia/Kolkata",
     currency: "INR",
+    cancellationDeductionType: "PERCENTAGE",
+    cancellationDeductionValue: "5.00",
+    cancellationRestockPolicy: "RELEASE_TO_AVAILABLE",
+    cancellationNotice:
+      "A cancellation deduction fee applies to cancelled orders as per company policy. The remaining net amount is credited/refunded to original payment method within 3-5 business days.",
   });
 
   // Intelligent Canvas Dimension Auto-Adjuster Engine
@@ -296,6 +305,12 @@ export default function SettingsPage() {
             invoiceFooterNotes: data.settings.invoiceFooterNotes || "",
             timezone: data.settings.timezone || "Asia/Kolkata",
             currency: data.settings.currency || "INR",
+            cancellationDeductionType: data.settings.cancellationDeductionType || "PERCENTAGE",
+            cancellationDeductionValue: data.settings.cancellationDeductionValue || "5.00",
+            cancellationRestockPolicy: data.settings.cancellationRestockPolicy || "RELEASE_TO_AVAILABLE",
+            cancellationNotice:
+              data.settings.cancellationNotice ||
+              "A cancellation deduction fee applies to cancelled orders as per company policy. The remaining net amount is credited/refunded to original payment method within 3-5 business days.",
           });
 
           if (logoUrl) {
@@ -913,7 +928,186 @@ export default function SettingsPage() {
           </div>
         </div>
 
-        {/* Section 5: Model Context Protocol (MCP) API Token & Remote Access */}
+        {/* Section 5: Order Cancellation & Deduction Policy */}
+        <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6 sm:p-7 space-y-6 shadow-xl">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-slate-800/80 pb-3">
+            <div className="flex items-center gap-2 text-rose-400 text-xs font-bold uppercase tracking-wider">
+              <ShieldAlert className="w-4 h-4" />
+              <span>Order Cancellation &amp; Deduction Policy</span>
+            </div>
+            <span className="text-[10px] bg-rose-500/10 text-rose-300 font-mono px-2 py-0.5 rounded border border-rose-500/20 font-semibold self-start sm:self-auto">
+              Automated Deduction on Cancel
+            </span>
+          </div>
+
+          <p className="text-xs text-slate-400 leading-relaxed">
+            When an order is cancelled (either from the Operations dashboard or via AI Agent MCP tools), configure whether a cancellation fee is deducted, how much is refunded, and whether reserved inventory is automatically released.
+          </p>
+
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-5">
+            {/* Deduction Type */}
+            <div className="space-y-1.5">
+              <label className="text-xs font-semibold text-slate-200 block">
+                Deduction Calculation Type
+              </label>
+              <select
+                name="cancellationDeductionType"
+                value={form.cancellationDeductionType}
+                onChange={handleChange}
+                className="w-full px-3.5 py-2.5 rounded-xl bg-slate-950 border border-slate-800 text-white text-xs focus:outline-none focus:border-rose-500 transition cursor-pointer"
+              >
+                <option value="PERCENTAGE">Percentage of Order Total (%)</option>
+                <option value="FIXED">Fixed Cancellation Fee (₹ Flat)</option>
+                <option value="NONE">No Deduction (0% / 100% Full Refund)</option>
+              </select>
+              <span className="text-[10px] text-slate-500 block">
+                Determines how cancellation fees are calculated.
+              </span>
+            </div>
+
+            {/* Deduction Value */}
+            <div className="space-y-1.5">
+              <label className="text-xs font-semibold text-slate-200 block">
+                Deduction Fee Rate / Amount {form.cancellationDeductionType === "PERCENTAGE" ? "(%)" : "(₹)"}
+              </label>
+              <div className="relative">
+                <input
+                  type="number"
+                  step="0.5"
+                  min="0"
+                  name="cancellationDeductionValue"
+                  disabled={form.cancellationDeductionType === "NONE"}
+                  value={form.cancellationDeductionType === "NONE" ? "0.00" : form.cancellationDeductionValue}
+                  onChange={handleChange}
+                  placeholder={form.cancellationDeductionType === "PERCENTAGE" ? "10.00" : "50.00"}
+                  className="w-full px-3.5 py-2.5 rounded-xl bg-slate-950 border border-slate-800 text-white text-xs font-mono placeholder:text-slate-600 focus:outline-none focus:border-rose-500 transition disabled:opacity-40 disabled:cursor-not-allowed"
+                />
+                <div className="absolute right-3 top-2.5 text-xs text-slate-500 font-bold">
+                  {form.cancellationDeductionType === "PERCENTAGE" ? "%" : "₹"}
+                </div>
+              </div>
+
+              {/* Quick Presets */}
+              {form.cancellationDeductionType === "PERCENTAGE" && (
+                <div className="flex items-center gap-1.5 pt-1 flex-wrap">
+                  {["0", "5", "10", "15", "20"].map((preset) => (
+                    <button
+                      key={preset}
+                      type="button"
+                      onClick={() => setForm((p) => ({ ...p, cancellationDeductionValue: `${preset}.00` }))}
+                      className={`text-[10px] font-mono px-2 py-0.5 rounded border transition cursor-pointer ${
+                        parseFloat(form.cancellationDeductionValue) === parseFloat(preset)
+                          ? "bg-rose-500/20 text-rose-300 border-rose-500/40 font-bold"
+                          : "bg-slate-950 text-slate-400 border-slate-800 hover:text-white"
+                      }`}
+                    >
+                      {preset}%
+                    </button>
+                  ))}
+                </div>
+              )}
+
+              {form.cancellationDeductionType === "FIXED" && (
+                <div className="flex items-center gap-1.5 pt-1 flex-wrap">
+                  {["50", "100", "150", "200"].map((preset) => (
+                    <button
+                      key={preset}
+                      type="button"
+                      onClick={() => setForm((p) => ({ ...p, cancellationDeductionValue: `${preset}.00` }))}
+                      className={`text-[10px] font-mono px-2 py-0.5 rounded border transition cursor-pointer ${
+                        parseFloat(form.cancellationDeductionValue) === parseFloat(preset)
+                          ? "bg-rose-500/20 text-rose-300 border-rose-500/40 font-bold"
+                          : "bg-slate-950 text-slate-400 border-slate-800 hover:text-white"
+                      }`}
+                    >
+                      ₹{preset}
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+
+            {/* Restock Policy */}
+            <div className="space-y-1.5">
+              <label className="text-xs font-semibold text-slate-200 block">
+                Inventory Restock Policy on Cancel
+              </label>
+              <select
+                name="cancellationRestockPolicy"
+                value={form.cancellationRestockPolicy}
+                onChange={handleChange}
+                className="w-full px-3.5 py-2.5 rounded-xl bg-slate-950 border border-slate-800 text-white text-xs focus:outline-none focus:border-rose-500 transition cursor-pointer"
+              >
+                <option value="RELEASE_TO_AVAILABLE">Release to Available Stock (Recommended)</option>
+                <option value="HOLD_IN_RESERVE">Hold in Quarantine / Manual Inspection</option>
+              </select>
+              <span className="text-[10px] text-slate-500 block">
+                Controls whether reserved warehouse stock is returned immediately.
+              </span>
+            </div>
+          </div>
+
+          {/* Customer Cancellation Notice */}
+          <div className="space-y-1.5">
+            <label className="text-xs font-semibold text-slate-200 block">
+              Customer Cancellation &amp; Refund Notice (Displayed on Bills &amp; Invoices)
+            </label>
+            <textarea
+              name="cancellationNotice"
+              rows={2}
+              value={form.cancellationNotice}
+              onChange={handleChange}
+              placeholder="A cancellation deduction fee applies to cancelled orders as per company policy. The remaining net amount is credited/refunded to original payment method within 3-5 business days."
+              className="w-full px-3.5 py-2.5 rounded-xl bg-slate-950 border border-slate-800 text-white text-xs placeholder:text-slate-600 focus:outline-none focus:border-rose-500 transition"
+            />
+            <span className="text-[10px] text-slate-500 block">
+              Appears on the digital bill and printed invoice when an order is cancelled.
+            </span>
+          </div>
+
+          {/* Interactive Calculation Simulator Card */}
+          <div className="p-4 bg-slate-950/80 rounded-xl border border-slate-800/80 space-y-2 text-xs">
+            <div className="flex items-center justify-between text-slate-300 font-bold border-b border-slate-800 pb-2">
+              <div className="flex items-center gap-1.5 text-rose-300">
+                <Percent className="w-3.5 h-3.5" />
+                <span>Live Deduction Simulator (Example Order of ₹1,000.00):</span>
+              </div>
+              <span className="text-[10px] font-mono text-slate-400">Sample Simulation</span>
+            </div>
+
+            {(() => {
+              const sampleTotal = 1000;
+              let sampleFee = 0;
+              if (form.cancellationDeductionType === "PERCENTAGE") {
+                sampleFee = Math.round((sampleTotal * (parseFloat(form.cancellationDeductionValue || "0") / 100)) * 100) / 100;
+              } else if (form.cancellationDeductionType === "FIXED") {
+                sampleFee = Math.min(sampleTotal, Math.max(0, parseFloat(form.cancellationDeductionValue || "0")));
+              } else {
+                sampleFee = 0;
+              }
+              const sampleRefund = Math.max(0, sampleTotal - sampleFee);
+
+              return (
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 pt-1">
+                  <div className="p-2.5 rounded-lg bg-slate-900 border border-slate-800">
+                    <span className="text-[10px] text-slate-400 uppercase font-semibold block">Order Amount</span>
+                    <span className="font-mono text-white font-bold text-sm">₹1,000.00</span>
+                  </div>
+                  <div className="p-2.5 rounded-lg bg-rose-950/30 border border-rose-900/30">
+                    <span className="text-[10px] text-rose-300 uppercase font-semibold block">Deduction Fee Levied</span>
+                    <span className="font-mono text-rose-400 font-bold text-sm">-₹{sampleFee.toFixed(2)}</span>
+                  </div>
+                  <div className="p-2.5 rounded-lg bg-emerald-950/30 border border-emerald-900/30">
+                    <span className="text-[10px] text-emerald-300 uppercase font-semibold block">Net Customer Refund</span>
+                    <span className="font-mono text-emerald-400 font-bold text-sm">₹{sampleRefund.toFixed(2)}</span>
+                  </div>
+                </div>
+              );
+            })()}
+          </div>
+        </div>
+
+        {/* Section 6: Model Context Protocol (MCP) API Token & Remote Access */}
         <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6 sm:p-7 space-y-4 shadow-xl">
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-slate-800/80 pb-3">
             <div className="flex items-center gap-2 text-indigo-400 text-xs font-bold uppercase tracking-wider">

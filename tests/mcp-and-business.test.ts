@@ -823,6 +823,105 @@ async function runTests() {
     company: billData.company.name,
   });
 
+  // --- Testing Order Cancellation Deduction Policy & Bill Display ---
+  console.log("\n--- Testing Order Cancellation Deduction Policy & Invoicing ---");
+  const settingsRoute = await import("../app/api/settings/route");
+
+  // 1. Configure 10% Cancellation Deduction Policy
+  const setPolicyReq = new Request("http://localhost:3000/api/settings", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      cancellationDeductionType: "PERCENTAGE",
+      cancellationDeductionValue: "10.00",
+      cancellationRestockPolicy: "RELEASE_TO_AVAILABLE",
+      cancellationNotice: "A standard 10% cancellation deduction applies.",
+    }),
+  }) as any;
+  const setPolicyRes = await settingsRoute.POST(setPolicyReq);
+  const setPolicyData = await setPolicyRes.json();
+  if (!setPolicyData.success) throw new Error("Failed to save cancellation deduction policy");
+
+  const verifySettingsReq = new Request("http://localhost:3000/api/settings") as any;
+  const verifySettingsRes = await settingsRoute.GET(verifySettingsReq);
+  const verifySettingsData = await verifySettingsRes.json();
+  if (
+    verifySettingsData.settings.cancellationDeductionType !== "PERCENTAGE" ||
+    verifySettingsData.settings.cancellationDeductionValue !== "10.00"
+  ) {
+    throw new Error("Settings did not persist cancellation deduction policy correctly");
+  }
+  console.log("✓ Successfully saved and verified Cancellation Deduction Policy in Settings (10% PERCENTAGE)");
+
+  // 2. Create order of ₹400 and test cancellation deduction
+  const cancelTestOrder = await orderService.createOrder({
+    workspaceId: principal.workspaceId,
+    newCustomer: { name: "Rohan Kapoor", phone: "+91 98765 11111" },
+    shippingAddress: "Bandra West, Mumbai, MH - 400050",
+    source: "Website",
+    items: [{ productId: dynamicTestProd.id, quantity: 2, unitPrice: 200 }],
+    actor: { id: "test_suite", name: "Automated Runner", type: "AI_AGENT" },
+    sourceType: "web",
+  });
+
+  const invBeforeCancel = await inventoryService.getInventorySummary(principal.workspaceId);
+
+  // 3. Cancel order via updateOrderStatus (10% of 400 = 40.00 fee, 360.00 refund)
+  const cancelResult: any = await orderService.updateOrderStatus({
+    workspaceId: principal.workspaceId,
+    orderId: cancelTestOrder.orderId,
+    newStatus: "CANCELLED",
+    cancellationReason: "Customer requested cancellation before dispatch",
+    actor: { id: "test_suite", name: "Operations Lead", type: "USER" },
+    sourceType: "web",
+  });
+
+  if (cancelResult.currentStatus !== "CANCELLED") {
+    throw new Error(`Order failed to cancel: ${cancelResult.currentStatus}`);
+  }
+  if (cancelResult.cancellationFee !== "40.00" || cancelResult.refundAmount !== "360.00") {
+    throw new Error(
+      `Cancellation math mismatch! Expected fee 40.00, refund 360.00, got fee: ${cancelResult.cancellationFee}, refund: ${cancelResult.refundAmount}`
+    );
+  }
+  console.log("✓ Order cancelled with 10% deduction math verified:", {
+    orderNumber: cancelResult.orderNumber,
+    fee: cancelResult.cancellationFee,
+    refund: cancelResult.refundAmount,
+    reason: cancelResult.cancellationReason,
+  });
+
+  // Verify stock was released back to available inventory
+  const invAfterCancel = await inventoryService.getInventorySummary(principal.workspaceId);
+  if (invAfterCancel.totalReservedStock !== invBeforeCancel.totalReservedStock - 2) {
+    throw new Error("Reserved stock was not released on order cancellation!");
+  }
+  console.log("✓ Reserved stock released to available inventory according to restock policy");
+
+  // 4. Verify cancelled digital tax bill displays cancellation fee and net refund
+  const cancelledBillReq = new Request(`http://localhost:3000/api/bill/${cancelTestOrder.orderId}`) as any;
+  const cancelledBillRes = await getBill(cancelledBillReq, {
+    params: Promise.resolve({ id: cancelTestOrder.orderId }),
+  });
+  const cancelledBillData = await cancelledBillRes.json();
+
+  if (cancelledBillData.order.status !== "CANCELLED") {
+    throw new Error("Cancelled bill does not report status CANCELLED");
+  }
+  if (cancelledBillData.order.cancellationFee !== "40.00") {
+    throw new Error(`Cancelled bill missing cancellationFee: ${cancelledBillData.order.cancellationFee}`);
+  }
+  if (cancelledBillData.order.refundAmount !== "360.00") {
+    throw new Error(`Cancelled bill missing refundAmount: ${cancelledBillData.order.refundAmount}`);
+  }
+  console.log("✓ Verified Cancelled Digital Tax Bill output with deduction breakdown:", {
+    orderStatus: cancelledBillData.order.status,
+    originalTotal: cancelledBillData.order.totalAmount,
+    cancellationFee: cancelledBillData.order.cancellationFee,
+    refundAmount: cancelledBillData.order.refundAmount,
+    notice: cancelledBillData.company.cancellationNotice,
+  });
+
   console.log("\n=======================================================");
   console.log("ALL PLATFORM AND MCP VERIFICATION TESTS PASSED CLEANLY!");
   console.log("=======================================================\n");
