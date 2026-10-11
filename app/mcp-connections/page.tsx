@@ -1,6 +1,7 @@
 "use client";
 
 import React, { useState } from "react";
+import Link from "next/link";
 import { Plug, Copy, Check, Sparkles, ShieldCheck, Terminal, Bot, ExternalLink, Code2, AlertTriangle, Trash2, KeyRound } from "lucide-react";
 
 export function McpConnectionsPage() {
@@ -63,11 +64,48 @@ export function McpConnectionsPage() {
 
   return (
     <div className="space-y-8 max-w-7xl mx-auto">
+      {/* Top Breadcrumb Navigation & Provider Switcher */}
+      <div className="flex flex-wrap items-center justify-between gap-4 border-b border-slate-800 pb-4">
+        <div className="flex items-center gap-2 text-xs">
+          <span className="text-slate-400">Integrations</span>
+          <span className="text-slate-600">/</span>
+          <span className="text-emerald-400 font-semibold flex items-center gap-1.5">
+            <Plug className="w-3.5 h-3.5" />
+            MCP Server Configuration
+          </span>
+        </div>
+
+        {/* Multi-Provider Tabs */}
+        <div className="flex items-center gap-2">
+          <Link
+            href="/chatgpt-mcp"
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-semibold bg-slate-900 hover:bg-slate-800 text-slate-300 border border-slate-800 transition"
+          >
+            <Bot className="w-3.5 h-3.5 text-violet-400" />
+            ChatGPT MCP Guide
+          </Link>
+          <Link
+            href="/gemini-mcp"
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-semibold bg-slate-900 hover:bg-slate-800 text-slate-300 border border-slate-800 transition"
+          >
+            <Sparkles className="w-3.5 h-3.5 text-indigo-400" />
+            Google Gemini MCP Guide
+            <span className="text-[9px] bg-indigo-500/30 text-indigo-200 px-1 rounded font-mono ml-0.5">
+              NEW
+            </span>
+          </Link>
+          <span className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-semibold bg-emerald-600/20 text-emerald-300 border border-emerald-500/30">
+            <Plug className="w-3.5 h-3.5 text-emerald-400" />
+            MCP Server Configuration
+          </span>
+        </div>
+      </div>
+
       {/* Header */}
       <div>
         <h1 className="text-2xl font-bold text-white flex items-center gap-2">
           <Plug className="w-6 h-6 text-emerald-400" />
-          Model Context Protocol (MCP) Connections
+          Model Context Protocol (MCP) Server Configuration
         </h1>
         <p className="text-xs text-slate-400 mt-1">
           Connect Claude Desktop, Cursor, Antigravity, or remote AI assistants over authenticated Streamable HTTP.

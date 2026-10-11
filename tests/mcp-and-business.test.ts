@@ -682,6 +682,58 @@ async function runTests() {
     console.log("✓ factory_reset password verification tested; live database wipe skipped during routine regression tests.");
   }
 
+  // 15. Test Multi-Provider Isolation (ChatGPT MCP & Google Gemini MCP)
+  console.log("\n--- Testing Multi-Provider Isolation (ChatGPT MCP & Google Gemini MCP) ---");
+  const { GET: getProviders, POST: validateProvider } = await import("../app/api/mcp/providers/route");
+  
+  // Test GET providers list
+  const dummyReq = new Request("http://localhost:3000/api/mcp/providers") as any;
+  const providersRes = await getProviders(dummyReq);
+  const providersData = await providersRes.json();
+  
+  if (!providersData.success || !Array.isArray(providersData.providers)) {
+    throw new Error("Failed to retrieve providers list from /api/mcp/providers");
+  }
+  
+  const chatgptProvider = providersData.providers.find((p: any) => p.id === "chatgpt_mcp");
+  const geminiProvider = providersData.providers.find((p: any) => p.id === "google_gemini");
+  
+  if (!chatgptProvider) {
+    throw new Error("ChatGPT MCP provider record missing!");
+  }
+  if (!geminiProvider) {
+    throw new Error("Google Gemini MCP provider record missing!");
+  }
+  
+  // Verify ChatGPT provider specifications remain 100% intact
+  if (!chatgptProvider.authTypes.includes("OAuth 2.1 (RFC 7636 PKCE)") || !chatgptProvider.authTypes.includes("Bearer Token (mcp_dev_token_apex)")) {
+    throw new Error("ChatGPT provider auth types were modified!");
+  }
+  console.log("✓ Verified ChatGPT MCP provider record intact & isolated:", chatgptProvider.name);
+  
+  // Verify Gemini provider specifications conform to official Google documentation
+  if (geminiProvider.eligibility.minAge !== 18 || geminiProvider.eligibility.keepActivityRequired !== true) {
+    throw new Error("Gemini eligibility requirements missing or invalid!");
+  }
+  if (!geminiProvider.officialDocsUrl.includes("17209137")) {
+    throw new Error("Gemini official documentation URL must reference Google Help article 17209137!");
+  }
+  console.log("✓ Verified Google Gemini MCP provider record with official Google requirements:", geminiProvider.name);
+  
+  // Test POST validation for Google Gemini
+  const validateReq = new Request("http://localhost:3000/api/mcp/providers", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ providerId: "google_gemini" }),
+  }) as any;
+  const validateRes = await validateProvider(validateReq);
+  const validateData = await validateRes.json();
+  
+  if (!validateData.success || validateData.provider !== "google_gemini" || !validateData.checks.providerIsolated) {
+    throw new Error("Google Gemini validation failed or provider isolation compromised!");
+  }
+  console.log("✓ Verified Google Gemini provider validation & zero-conflict isolation check passed");
+
   console.log("\n=======================================================");
   console.log("ALL PLATFORM AND MCP VERIFICATION TESTS PASSED CLEANLY!");
   console.log("=======================================================\n");

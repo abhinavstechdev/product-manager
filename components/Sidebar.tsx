@@ -31,7 +31,9 @@ const navigationItems = [
   { name: "Returns & QC", href: "/returns", icon: RotateCcw },
   { name: "Reports & Analytics", href: "/reports", icon: BarChart3 },
   { name: "AI Activity & Approvals", href: "/ai-activity", icon: Bot, badge: "AI" },
-  { name: "MCP Connections", href: "/mcp-connections", icon: Plug, highlight: true },
+  { name: "ChatGPT MCP Guide", href: "/chatgpt-mcp", icon: Bot },
+  { name: "Google Gemini MCP Guide", href: "/gemini-mcp", icon: Sparkles, badge: "NEW", highlight: true },
+  { name: "MCP Server Configuration", href: "/mcp-connections", icon: Plug },
 ];
 
 export function Sidebar() {
