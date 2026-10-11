@@ -23,6 +23,9 @@ import {
   Link as LinkIcon,
   Trash2,
   Camera,
+  Sparkles,
+  Crop,
+  Maximize2,
 } from "lucide-react";
 
 export default function SettingsPage() {
@@ -30,8 +33,23 @@ export default function SettingsPage() {
   const [saving, setSaving] = useState(false);
   const [message, setMessage] = useState<{ type: "success" | "error"; text: string } | null>(null);
 
+  interface LogoMeta {
+    width: number;
+    height: number;
+    originalWidth: number;
+    originalHeight: number;
+    aspectRatio: string;
+    preset: "auto" | "banner" | "square" | "original";
+    trimmed: boolean;
+  }
+
   const [logoInputMode, setLogoInputMode] = useState<"upload" | "url">("upload");
   const [uploadedFileName, setUploadedFileName] = useState<string>("");
+  const [rawImageSource, setRawImageSource] = useState<string>("");
+  const [logoPreset, setLogoPreset] = useState<"auto" | "banner" | "square" | "original">("auto");
+  const [autoTrimMargins, setAutoTrimMargins] = useState<boolean>(true);
+  const [logoMeta, setLogoMeta] = useState<LogoMeta | null>(null);
+  const [isProcessingLogo, setIsProcessingLogo] = useState<boolean>(false);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
 
   const [form, setForm] = useState({
@@ -47,6 +65,209 @@ export default function SettingsPage() {
     timezone: "Asia/Kolkata",
     currency: "INR",
   });
+
+  // Intelligent Canvas Dimension Auto-Adjuster Engine
+  const autoAdjustLogo = (
+    imageSrc: string,
+    preset: "auto" | "banner" | "square" | "original" = logoPreset,
+    trim: boolean = autoTrimMargins
+  ) => {
+    if (!imageSrc) return;
+    setIsProcessingLogo(true);
+
+    const img = new window.Image();
+    img.crossOrigin = "anonymous";
+    img.onload = () => {
+      const origW = img.naturalWidth || img.width;
+      const origH = img.naturalHeight || img.height;
+      if (!origW || !origH) {
+        setIsProcessingLogo(false);
+        return;
+      }
+
+      let srcX = 0;
+      let srcY = 0;
+      let srcW = origW;
+      let srcH = origH;
+      let trimmed = false;
+
+      // 1. Auto-detect & crop surrounding blank/transparent padding
+      if (trim) {
+        try {
+          const scanCanvas = document.createElement("canvas");
+          scanCanvas.width = origW;
+          scanCanvas.height = origH;
+          const sCtx = scanCanvas.getContext("2d", { willReadFrequently: true });
+          if (sCtx) {
+            sCtx.drawImage(img, 0, 0);
+            const imgData = sCtx.getImageData(0, 0, origW, origH);
+            const data = imgData.data;
+
+            // Check corner pixels for white/light background
+            const cornerIndices = [
+              0,
+              (origW - 1) * 4,
+              ((origH - 1) * origW) * 4,
+              (origH * origW - 1) * 4,
+            ];
+            let lightCornerCount = 0;
+            for (const idx of cornerIndices) {
+              const r = data[idx];
+              const g = data[idx + 1];
+              const b = data[idx + 2];
+              const a = data[idx + 3];
+              if (a > 200 && r > 235 && g > 235 && b > 235) {
+                lightCornerCount++;
+              }
+            }
+            const isLightBg = lightCornerCount >= 2;
+
+            let minX = origW;
+            let minY = origH;
+            let maxX = 0;
+            let maxY = 0;
+            let foundContent = false;
+
+            const step = origW > 1000 || origH > 1000 ? 2 : 1;
+            for (let y = 0; y < origH; y += step) {
+              for (let x = 0; x < origW; x += step) {
+                const idx = (y * origW + x) * 4;
+                const a = data[idx + 3];
+                const r = data[idx];
+                const g = data[idx + 1];
+                const b = data[idx + 2];
+
+                let isContent = false;
+                if (a < 15) {
+                  isContent = false;
+                } else if (isLightBg) {
+                  isContent = !(r > 238 && g > 238 && b > 238);
+                } else {
+                  isContent = a >= 25;
+                }
+
+                if (isContent) {
+                  foundContent = true;
+                  if (x < minX) minX = x;
+                  if (x > maxX) maxX = x;
+                  if (y < minY) minY = y;
+                  if (y > maxY) maxY = y;
+                }
+              }
+            }
+
+            if (foundContent && maxX > minX && maxY > minY) {
+              const padX = Math.max(4, Math.round((maxX - minX) * 0.04));
+              const padY = Math.max(4, Math.round((maxY - minY) * 0.04));
+              srcX = Math.max(0, minX - padX);
+              srcY = Math.max(0, minY - padY);
+              srcW = Math.min(origW - srcX, maxX - minX + padX * 2);
+              srcH = Math.min(origH - srcY, maxY - minY + padY * 2);
+
+              if (srcW < origW * 0.95 || srcH < origH * 0.95) {
+                trimmed = true;
+              }
+            }
+          }
+        } catch (err) {
+          console.warn("Canvas trim skipped:", err);
+        }
+      }
+
+      // 2. Intelligent Auto-Adjust Dimensions for Invoices
+      const aspect = srcW / srcH;
+      let targetW: number;
+      let targetH: number;
+
+      if (preset === "square") {
+        targetW = 260;
+        targetH = 260;
+      } else if (preset === "banner") {
+        targetW = 450;
+        targetH = 150;
+      } else if (preset === "original") {
+        const maxW = 450;
+        const maxH = 180;
+        const scale = Math.min(maxW / srcW, maxH / srcH, 1);
+        targetW = Math.round(srcW * scale);
+        targetH = Math.round(srcH * scale);
+      } else {
+        // "auto": dynamically pick the ideal invoice dimension
+        if (aspect >= 2.2) {
+          targetW = 440;
+          targetH = Math.min(150, Math.round(440 / aspect));
+        } else if (aspect >= 1.25) {
+          targetW = 380;
+          targetH = Math.min(180, Math.round(380 / aspect));
+        } else if (aspect >= 0.8) {
+          targetW = 240;
+          targetH = Math.round(240 / aspect);
+        } else {
+          targetH = 180;
+          targetW = Math.round(180 * aspect);
+        }
+      }
+
+      // 3. Render into clean output canvas with high DPI smoothing
+      const outCanvas = document.createElement("canvas");
+      outCanvas.width = targetW;
+      outCanvas.height = targetH;
+      const outCtx = outCanvas.getContext("2d");
+      if (!outCtx) {
+        setIsProcessingLogo(false);
+        return;
+      }
+
+      outCtx.imageSmoothingEnabled = true;
+      outCtx.imageSmoothingQuality = "high";
+
+      if (preset === "square" || preset === "banner") {
+        const scale = Math.min(targetW / srcW, targetH / srcH);
+        const drawW = srcW * scale;
+        const drawH = srcH * scale;
+        const drawX = (targetW - drawW) / 2;
+        const drawY = (targetH - drawH) / 2;
+        outCtx.drawImage(img, srcX, srcY, srcW, srcH, drawX, drawY, drawW, drawH);
+      } else {
+        outCtx.drawImage(img, srcX, srcY, srcW, srcH, 0, 0, targetW, targetH);
+      }
+
+      const compressedDataUrl = outCanvas.toDataURL("image/png", 0.95);
+      setForm((prev) => ({ ...prev, companyLogoUrl: compressedDataUrl }));
+      setLogoMeta({
+        width: targetW,
+        height: targetH,
+        originalWidth: origW,
+        originalHeight: origH,
+        aspectRatio: `${(targetW / targetH).toFixed(1)}:1`,
+        preset,
+        trimmed,
+      });
+      setIsProcessingLogo(false);
+    };
+
+    img.onerror = () => {
+      setIsProcessingLogo(false);
+      setMessage({ type: "error", text: "Could not process logo. If using a web URL, ensure it allows direct image access." });
+    };
+
+    img.src = imageSrc;
+  };
+
+  const handlePresetChange = (newPreset: "auto" | "banner" | "square" | "original") => {
+    setLogoPreset(newPreset);
+    if (rawImageSource) {
+      autoAdjustLogo(rawImageSource, newPreset, autoTrimMargins);
+    }
+  };
+
+  const handleToggleTrim = () => {
+    const newTrim = !autoTrimMargins;
+    setAutoTrimMargins(newTrim);
+    if (rawImageSource) {
+      autoAdjustLogo(rawImageSource, logoPreset, newTrim);
+    }
+  };
 
   useEffect(() => {
     async function fetchSettings() {
@@ -71,12 +292,32 @@ export default function SettingsPage() {
           });
 
           if (logoUrl) {
+            setRawImageSource(logoUrl);
             if (logoUrl.startsWith("http://") || logoUrl.startsWith("https://")) {
               setLogoInputMode("url");
             } else {
               setLogoInputMode("upload");
               setUploadedFileName("Uploaded company logo");
             }
+
+            const img = new window.Image();
+            img.crossOrigin = "anonymous";
+            img.onload = () => {
+              const w = img.naturalWidth || img.width;
+              const h = img.naturalHeight || img.height;
+              if (w && h) {
+                setLogoMeta({
+                  width: w,
+                  height: h,
+                  originalWidth: w,
+                  originalHeight: h,
+                  aspectRatio: `${(w / h).toFixed(1)}:1`,
+                  preset: "auto",
+                  trimmed: false,
+                });
+              }
+            };
+            img.src = logoUrl;
           }
         }
       } catch (err: any) {
@@ -104,46 +345,27 @@ export default function SettingsPage() {
       const rawResult = event.target?.result as string;
       if (!rawResult) return;
 
-      // If SVG or small file (< 80KB), store directly
-      if (file.type.includes("svg") || file.size < 80 * 1024) {
-        setForm((prev) => ({ ...prev, companyLogoUrl: rawResult }));
-        return;
-      }
-
-      // Resize image using offscreen canvas to keep payload compact and high quality
-      const img = new window.Image();
-      img.src = rawResult;
-      img.onload = () => {
-        const maxW = 500;
-        const maxH = 250;
-        let w = img.width;
-        let h = img.height;
-
-        if (w > maxW || h > maxH) {
-          const ratio = Math.min(maxW / w, maxH / h);
-          w = Math.round(w * ratio);
-          h = Math.round(h * ratio);
-        }
-
-        const canvas = document.createElement("canvas");
-        canvas.width = w;
-        canvas.height = h;
-        const ctx = canvas.getContext("2d");
-        if (ctx) {
-          ctx.drawImage(img, 0, 0, w, h);
-          const compressedDataUrl = canvas.toDataURL("image/png", 0.9);
-          setForm((prev) => ({ ...prev, companyLogoUrl: compressedDataUrl }));
-        } else {
-          setForm((prev) => ({ ...prev, companyLogoUrl: rawResult }));
-        }
-      };
+      setRawImageSource(rawResult);
+      // Auto-adjust dimensions immediately for perfect invoice proportions
+      autoAdjustLogo(rawResult, logoPreset, autoTrimMargins);
     };
     reader.readAsDataURL(file);
   };
 
+  const handleAutoAdjustUrl = () => {
+    if (!form.companyLogoUrl) {
+      setMessage({ type: "error", text: "Please enter an image URL first." });
+      return;
+    }
+    setRawImageSource(form.companyLogoUrl);
+    autoAdjustLogo(form.companyLogoUrl, logoPreset, autoTrimMargins);
+  };
+
   const handleRemoveLogo = () => {
     setForm((prev) => ({ ...prev, companyLogoUrl: "" }));
+    setRawImageSource("");
     setUploadedFileName("");
+    setLogoMeta(null);
     if (fileInputRef.current) {
       fileInputRef.current.value = "";
     }
@@ -279,7 +501,7 @@ export default function SettingsPage() {
                     <span>Company Logo for Bills &amp; Invoices</span>
                   </label>
                   <span className="text-[11px] text-slate-400 block mt-0.5">
-                    Choose to upload an image from your device/phone or provide a web URL.
+                    Upload an image or provide a URL — dimensions and whitespace margins are automatically adjusted for a perfect invoice fit.
                   </span>
                 </div>
 
@@ -313,7 +535,7 @@ export default function SettingsPage() {
                 </div>
               </div>
 
-              <div className="grid grid-cols-1 lg:grid-cols-3 gap-4 items-center pt-1">
+              <div className="grid grid-cols-1 lg:grid-cols-3 gap-4 items-start pt-1">
                 {/* Mode 1: File Upload Dropzone */}
                 {logoInputMode === "upload" ? (
                   <div className="lg:col-span-2 space-y-2">
@@ -336,7 +558,7 @@ export default function SettingsPage() {
                         Click or tap to upload logo image
                       </p>
                       <p className="text-[11px] text-slate-400 mt-0.5">
-                        PNG, JPG, SVG, WebP from your phone photo gallery or computer
+                        PNG, JPG, SVG, WebP • Auto-adjusts proportions &amp; trims blank padding
                       </p>
                       {uploadedFileName && (
                         <div className="mt-2.5 px-2.5 py-1 rounded-md bg-indigo-950/80 border border-indigo-500/30 text-[11px] text-indigo-300 font-mono">
@@ -347,20 +569,31 @@ export default function SettingsPage() {
                   </div>
                 ) : (
                   /* Mode 2: Web Image URL Input */
-                  <div className="lg:col-span-2 space-y-1.5">
+                  <div className="lg:col-span-2 space-y-2">
                     <label className="text-xs font-semibold text-slate-300 block">
                       Direct Image Web URL
                     </label>
-                    <input
-                      type="text"
-                      name="companyLogoUrl"
-                      value={form.companyLogoUrl}
-                      onChange={handleChange}
-                      placeholder="https://example.com/logo.png"
-                      className="w-full px-3.5 py-2.5 rounded-xl bg-slate-900 border border-slate-800 text-white text-xs font-mono placeholder:text-slate-600 focus:outline-none focus:border-indigo-500 transition"
-                    />
+                    <div className="flex flex-col sm:flex-row gap-2">
+                      <input
+                        type="text"
+                        name="companyLogoUrl"
+                        value={form.companyLogoUrl}
+                        onChange={handleChange}
+                        placeholder="https://example.com/logo.png"
+                        className="flex-1 px-3.5 py-2.5 rounded-xl bg-slate-900 border border-slate-800 text-white text-xs font-mono placeholder:text-slate-600 focus:outline-none focus:border-indigo-500 transition"
+                      />
+                      <button
+                        type="button"
+                        onClick={handleAutoAdjustUrl}
+                        disabled={!form.companyLogoUrl || isProcessingLogo}
+                        className="px-3 py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 text-white text-xs font-bold transition flex items-center justify-center gap-1.5 shrink-0 cursor-pointer"
+                      >
+                        <Sparkles className="w-3.5 h-3.5" />
+                        <span>Auto-Adjust</span>
+                      </button>
+                    </div>
                     <span className="text-[10px] text-slate-500 block">
-                      Paste a publicly accessible direct image link (PNG with transparent background recommended).
+                      Paste a direct image URL and click &quot;Auto-Adjust&quot; to calibrate dimensions and trim empty margins for invoices.
                     </span>
                   </div>
                 )}
@@ -370,13 +603,13 @@ export default function SettingsPage() {
                   <span className="text-[11px] font-semibold text-slate-400 block">
                     Bill Invoice Preview:
                   </span>
-                  <div className="bg-white rounded-xl border border-slate-300 p-3 flex items-center justify-between shadow-md">
-                    <div className="flex items-center gap-2.5 min-h-[48px]">
+                  <div className="bg-white rounded-xl border border-slate-300 p-3 sm:p-4 flex items-center justify-between shadow-md">
+                    <div className="flex items-center gap-3 min-h-[50px]">
                       {form.companyLogoUrl ? (
                         <img
                           src={form.companyLogoUrl}
                           alt="Logo Preview"
-                          className="h-10 max-w-[120px] object-contain"
+                          className="h-11 max-w-[140px] sm:max-w-[160px] object-contain"
                           onError={(e) => {
                             (e.target as any).style.display = "none";
                           }}
@@ -407,6 +640,104 @@ export default function SettingsPage() {
                   </div>
                 </div>
               </div>
+
+              {/* Dimension Auto-Adjustment Toolbar (Shown whenever a logo is present) */}
+              {form.companyLogoUrl && (
+                <div className="p-3.5 bg-slate-900/90 rounded-xl border border-indigo-500/30 space-y-3 mt-1">
+                  <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-800 pb-2.5">
+                    <div className="flex items-center gap-2">
+                      <Sparkles className="w-4 h-4 text-indigo-400 shrink-0" />
+                      <span className="text-xs font-bold text-white">Dimension Auto-Adjustment</span>
+                      {logoMeta && (
+                        <span className="px-2 py-0.5 rounded-full bg-indigo-500/20 text-indigo-300 text-[10px] font-mono border border-indigo-500/30">
+                          {logoMeta.width} × {logoMeta.height} px ({logoMeta.aspectRatio})
+                        </span>
+                      )}
+                    </div>
+
+                    <div className="flex items-center gap-2">
+                      {logoMeta?.trimmed && (
+                        <span className="text-[10px] text-emerald-400 flex items-center gap-1 font-medium bg-emerald-950/60 px-2 py-0.5 rounded border border-emerald-500/30">
+                          <Check className="w-3 h-3" /> Blank margins trimmed
+                        </span>
+                      )}
+                      <button
+                        type="button"
+                        onClick={handleToggleTrim}
+                        title="Toggle margin auto-trim"
+                        className={`text-[10px] px-2.5 py-1 rounded-lg border transition flex items-center gap-1 cursor-pointer font-medium ${
+                          autoTrimMargins
+                            ? "bg-indigo-950 border-indigo-500/50 text-indigo-300"
+                            : "bg-slate-800 border-slate-700 text-slate-400"
+                        }`}
+                      >
+                        <Crop className="w-3 h-3" />
+                        <span>Trim Margins: {autoTrimMargins ? "ON" : "OFF"}</span>
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* Preset Options */}
+                  <div className="flex flex-wrap items-center gap-1.5 pt-0.5">
+                    <span className="text-[11px] font-medium text-slate-400 mr-1">Proportions:</span>
+                    <button
+                      type="button"
+                      onClick={() => handlePresetChange("auto")}
+                      className={`px-2.5 py-1 rounded-lg text-[11px] font-semibold transition cursor-pointer flex items-center gap-1 ${
+                        logoPreset === "auto"
+                          ? "bg-indigo-600 text-white shadow"
+                          : "bg-slate-800 text-slate-300 hover:bg-slate-700"
+                      }`}
+                    >
+                      <Sparkles className="w-3 h-3" />
+                      <span>Auto-Fit (Recommended)</span>
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => handlePresetChange("banner")}
+                      className={`px-2.5 py-1 rounded-lg text-[11px] font-semibold transition cursor-pointer flex items-center gap-1 ${
+                        logoPreset === "banner"
+                          ? "bg-indigo-600 text-white shadow"
+                          : "bg-slate-800 text-slate-300 hover:bg-slate-700"
+                      }`}
+                    >
+                      <Maximize2 className="w-3 h-3" />
+                      <span>Wide Header (3:1)</span>
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => handlePresetChange("square")}
+                      className={`px-2.5 py-1 rounded-lg text-[11px] font-semibold transition cursor-pointer flex items-center gap-1 ${
+                        logoPreset === "square"
+                          ? "bg-indigo-600 text-white shadow"
+                          : "bg-slate-800 text-slate-300 hover:bg-slate-700"
+                      }`}
+                    >
+                      <span>Square Badge (1:1)</span>
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => handlePresetChange("original")}
+                      className={`px-2.5 py-1 rounded-lg text-[11px] font-semibold transition cursor-pointer flex items-center gap-1 ${
+                        logoPreset === "original"
+                          ? "bg-indigo-600 text-white shadow"
+                          : "bg-slate-800 text-slate-300 hover:bg-slate-700"
+                      }`}
+                    >
+                      <span>Original Ratio</span>
+                    </button>
+
+                    {isProcessingLogo && (
+                      <span className="text-[11px] text-indigo-400 animate-pulse ml-auto flex items-center gap-1">
+                        <RefreshCw className="w-3 h-3 animate-spin" /> Adjusting...
+                      </span>
+                    )}
+                  </div>
+                </div>
+              )}
             </div>
           </div>
         </div>

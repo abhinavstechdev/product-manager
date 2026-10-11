@@ -173,7 +173,7 @@ function BillContent() {
                   <img
                     src={company.logoUrl}
                     alt={company.name}
-                    className="h-10 sm:h-12 w-auto max-w-[120px] object-contain rounded"
+                    className="h-10 sm:h-12 md:h-14 w-auto max-w-[160px] sm:max-w-[200px] object-contain rounded"
                   />
                 ) : (
                   <div className="w-10 h-10 sm:w-11 sm:h-11 rounded-xl bg-gradient-to-tr from-indigo-700 to-indigo-500 flex items-center justify-center text-white shadow-md font-bold text-base sm:text-lg">
