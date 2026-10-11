@@ -10,6 +10,7 @@ const PUBLIC_PREFIXES = [
   "/login",
   "/oauth/consent",
   "/api/auth",
+  "/api/health",
   "/api/mcp",
   "/api/oauth",
   "/.well-known",
